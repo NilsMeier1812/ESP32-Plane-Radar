@@ -11,7 +11,7 @@
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 
-namespace fonts = lgfx::v1::fonts;
+namespace uifonts = lgfx::v1::fonts;
 
 namespace ui::runway {
 namespace {
@@ -24,7 +24,7 @@ bool s_in_range[data::large_airports::kAirportCount];
 bool s_runway_label_ready = false;
 bool s_runway_label_use_vlw = false;
 float s_runway_label_vlw_size = 0.38f;
-const lgfx::GFXfont* s_runway_label_gfx = &fonts::FreeSansBold12pt7b;
+const lgfx::GFXfont* s_runway_label_gfx = &uifonts::FreeSansBold12pt7b;
 
 int measureVlwHeight(lgfx::LGFXBase& gfx, float size) {
   gfx.setTextSize(size);
@@ -55,7 +55,7 @@ void initRunwayLabelStyle(lgfx::LGFXBase& gfx) {
     s_runway_label_use_vlw = true;
     s_runway_label_vlw_size = findVlwSizeForHeight(gfx, target);
   } else {
-    s_runway_label_gfx = &fonts::FreeSansBold12pt7b;
+    s_runway_label_gfx = &uifonts::FreeSansBold12pt7b;
     s_runway_label_use_vlw = false;
   }
   s_runway_label_ready = true;
