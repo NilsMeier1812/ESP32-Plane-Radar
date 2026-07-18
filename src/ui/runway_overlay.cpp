@@ -20,7 +20,6 @@ constexpr float kKmPerDeg = 111.0f;
 constexpr size_t kMaxAirportLabels = 32;
 
 bool s_in_range[data::large_airports::kAirportCount];
-bool s_label_pending[data::large_airports::kAirportCount];
 
 bool s_runway_label_ready = false;
 bool s_runway_label_use_vlw = false;
@@ -252,35 +251,49 @@ void drawLargeAirportRunways(lgfx::LGFXBase& gfx) {
   displayFontEnsureLoaded(gfx);
   const float radius_km = radar::fetchRadiusKm();
 
+  // Labels are driven by the airport position, not by runway data, so fields
+  // without any runway geometry (e.g. small airfields like EDQH) still get a
+  // label. Keep the nearest ones when more than kMaxAirportLabels are in range
+  // so dense areas show the closest fields instead of an alphabetical subset.
   uint16_t label_airports[kMaxAirportLabels];
+  float label_dist[kMaxAirportLabels];
   size_t label_count = 0;
 
   for (size_t i = 0; i < data::large_airports::kAirportCount; ++i) {
-    s_in_range[i] = false;
-    s_label_pending[i] = false;
+    const auto& ap = data::large_airports::kAirports[i];
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    offsetKmFromCenter(e7ToDeg(ap.lat_e7), e7ToDeg(ap.lon_e7), &dx_km, &dy_km,
+                       &dist_km);
+    s_in_range[i] = (dist_km <= radius_km);
+    if (!s_in_range[i]) {
+      continue;
+    }
+    if (label_count < kMaxAirportLabels) {
+      label_airports[label_count] = static_cast<uint16_t>(i);
+      label_dist[label_count] = dist_km;
+      ++label_count;
+      continue;
+    }
+    size_t farthest = 0;
+    for (size_t j = 1; j < kMaxAirportLabels; ++j) {
+      if (label_dist[j] > label_dist[farthest]) {
+        farthest = j;
+      }
+    }
+    if (dist_km < label_dist[farthest]) {
+      label_airports[farthest] = static_cast<uint16_t>(i);
+      label_dist[farthest] = dist_km;
+    }
   }
 
+  // Runways are an optional visual for the fields that do have geometry; they
+  // no longer gate the labels.
   for (size_t i = 0; i < data::large_airports::kRunwayCount; ++i) {
     const auto& rw = data::large_airports::kRunways[i];
-    const uint16_t ap_idx = rw.airport_idx;
-    if (!s_in_range[ap_idx]) {
-      const auto& ap = data::large_airports::kAirports[ap_idx];
-      float dx_km = 0.0f;
-      float dy_km = 0.0f;
-      float dist_km = 0.0f;
-      offsetKmFromCenter(e7ToDeg(ap.lat_e7), e7ToDeg(ap.lon_e7), &dx_km, &dy_km,
-                         &dist_km);
-      s_in_range[ap_idx] = (dist_km <= radius_km);
-    }
-    if (!s_in_range[ap_idx]) {
-      continue;
-    }
-    if (!drawRunwayLine(gfx, rw)) {
-      continue;
-    }
-    if (!s_label_pending[ap_idx] && label_count < kMaxAirportLabels) {
-      s_label_pending[ap_idx] = true;
-      label_airports[label_count++] = ap_idx;
+    if (s_in_range[rw.airport_idx]) {
+      drawRunwayLine(gfx, rw);
     }
   }
 
