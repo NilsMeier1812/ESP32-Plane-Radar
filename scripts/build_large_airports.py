@@ -5,11 +5,30 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_H = ROOT / "include" / "data" / "large_airports.h"
+
+# Airfields that OurAirports does not classify as "large_airport" but that we
+# still want on the map (e.g. smaller regional fields). Keyed by ICAO ident:
+#   ident: (latitude_deg, longitude_deg)
+# To add a field, look up its reference point on ourairports.com and add a
+# matching runway below so it actually gets drawn (labels only appear for
+# airports that have at least one runway on screen).
+EXTRA_AIRPORTS: dict[str, tuple[float, float]] = {
+    "EDQH": (49.582708, 10.878339),  # Herzogenaurach
+}
+
+# Manual runway segments for the extra airfields above, used when OurAirports
+# has no threshold coordinates for the runway. Each entry lists one or more
+# runways as (true_bearing_deg, length_m); the endpoints are derived from the
+# airport reference point so the runway is centred on it.
+EXTRA_RUNWAYS: dict[str, list[tuple[float, float]]] = {
+    "EDQH": [(70.0, 700)],  # runway 07/25, ~700 m
+}
 OUT_CPP = ROOT / "src" / "data" / "large_airports_data.cpp"
 
 AIRPORTS_URL = (
@@ -58,6 +77,19 @@ def is_helipad(row: dict[str, str]) -> bool:
     return length_ft < 2500
 
 
+def offset_e7(
+    lat_deg: float, lon_deg: float, bearing_deg: float, dist_m: float
+) -> tuple[int, int]:
+    """Point at ``dist_m`` from (lat, lon) along ``bearing_deg`` (true)."""
+    r_earth = 6371000.0
+    br = math.radians(bearing_deg)
+    d_lat = math.degrees((dist_m * math.cos(br)) / r_earth)
+    d_lon = math.degrees(
+        (dist_m * math.sin(br)) / (r_earth * math.cos(math.radians(lat_deg)))
+    )
+    return coord_e7(str(lat_deg + d_lat)), coord_e7(str(lon_deg + d_lon))
+
+
 def build_dataset() -> tuple[
     list[tuple[str, int, int]],
     list[tuple[int, int, int, int, int, int]],
@@ -77,6 +109,9 @@ def build_dataset() -> tuple[
         if lat is None or lon is None:
             continue
         large_idents[ident] = (lat, lon)
+
+    for ident, (lat_deg, lon_deg) in EXTRA_AIRPORTS.items():
+        large_idents[ident] = (coord_e7(str(lat_deg)), coord_e7(str(lon_deg)))
 
     airport_rows = sorted(
         (ident, lat, lon) for ident, (lat, lon) in large_idents.items()
@@ -115,6 +150,25 @@ def build_dataset() -> tuple[
                 length_m,
             )
         )
+
+    for ident, runway_specs in EXTRA_RUNWAYS.items():
+        if ident not in airport_index:
+            continue
+        lat_deg, lon_deg = EXTRA_AIRPORTS[ident]
+        for bearing_deg, length_m in runway_specs:
+            half = length_m / 2.0
+            le_lat, le_lon = offset_e7(lat_deg, lon_deg, bearing_deg + 180.0, half)
+            he_lat, he_lon = offset_e7(lat_deg, lon_deg, bearing_deg, half)
+            segments.append(
+                (
+                    airport_index[ident],
+                    le_lat,
+                    le_lon,
+                    he_lat,
+                    he_lon,
+                    int(round(length_m)),
+                )
+            )
 
     segments.sort(key=lambda row: (row[0], -row[5]))
     return airport_rows, segments
