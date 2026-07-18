@@ -14,6 +14,7 @@
 #endif
 
 #include "config.h"
+#include "services/config_server.h"
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
@@ -63,8 +64,6 @@ WiFiManager s_wm;
 bool s_wm_configured = false;
 
 void ensureWifiManager();
-void startLanWebPortal();
-void stopLanWebPortal();
 bool wifiLinkUp();
 
 constexpr int kCoordParamLen = 20;
@@ -170,7 +169,7 @@ bool storedWifiCredentials() {
 }
 
 void eraseWifiCredentials() {
-  stopLanWebPortal();
+  services::config_server::stop();
   WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_OFF);
   delay(100);
@@ -226,35 +225,6 @@ void ensureWifiManager() {
   s_wm.setAPCallback(onConfigPortalApStarted);
   attachPortalParams(s_wm);
   s_wm_configured = true;
-}
-
-void startLanWebPortal() {
-  if (!wifiLinkUp() || s_wm.getWebPortalActive() ||
-      s_wm.getConfigPortalActive()) {
-    return;
-  }
-  refreshPortalParamDefaults();
-  WiFi.mode(WIFI_STA);
-  s_wm.setConfigPortalBlocking(false);
-#ifdef WM_MDNS
-  MDNS.end();
-  if (MDNS.begin(config::kPortalHostname)) {
-    MDNS.addService("http", "tcp", 80);
-  }
-#endif
-  s_wm.startWebPortal();
-  Serial.printf("LAN config: http://%s.local or http://%s\n",
-                config::kPortalHostname, WiFi.localIP().toString().c_str());
-}
-
-void stopLanWebPortal() {
-  if (!s_wm.getWebPortalActive()) {
-    return;
-  }
-  s_wm.stopWebPortal();
-#ifdef WM_MDNS
-  MDNS.end();
-#endif
 }
 
 void prepareSta() {
@@ -330,7 +300,7 @@ bool connectSavedNetwork(bool show_ui) {
 }
 
 bool openConfigPortal() {
-  stopLanWebPortal();
+  services::config_server::stop();
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   delay(50);
@@ -418,15 +388,13 @@ bool wifiReconnect() {
 void wifiLoop() {
   ensureWifiManager();
   if (wifiLinkUp()) {
-    if (!s_wm.getWebPortalActive() && !s_wm.getConfigPortalActive()) {
-      startLanWebPortal();
+    if (!services::config_server::running()) {
+      services::config_server::begin();
     }
-    if (s_wm.getWebPortalActive() || s_wm.getConfigPortalActive()) {
-      bootButtonPollLongPress();
-      s_wm.process();
-    }
-  } else {
-    stopLanWebPortal();
+    bootButtonPollLongPress();
+    services::config_server::handle();
+  } else if (services::config_server::running()) {
+    services::config_server::stop();
   }
 }
 

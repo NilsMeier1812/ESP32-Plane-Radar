@@ -1,10 +1,12 @@
 #include "services/radar_location.h"
 
 #include <Preferences.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
 #include "config.h"
+#include "data/large_airports.h"
 
 namespace services::location {
 
@@ -70,12 +72,58 @@ bool saveFromStrings(const char* lat_str, const char* lon_str) {
   if (!parseCoord(lat_str, &lat) || !parseCoord(lon_str, &lon)) {
     return false;
   }
+  return saveLatLon(lat, lon);
+}
+
+bool saveLatLon(double lat, double lon) {
   if (!validLatLon(lat, lon)) {
     return false;
   }
   persist(lat, lon);
   Serial.printf("Radar location saved: %.6f, %.6f\n", lat, lon);
   return true;
+}
+
+bool saveFromIcao(const char* icao) {
+  if (icao == nullptr) {
+    return false;
+  }
+  // Normalise to a 4-char upper-case ICAO ident.
+  char key[5];
+  size_t n = 0;
+  for (const char* p = icao; *p != '\0' && n < 4; ++p) {
+    if (*p == ' ') {
+      continue;
+    }
+    key[n++] = static_cast<char>(std::toupper(static_cast<unsigned char>(*p)));
+  }
+  key[n] = '\0';
+  if (n != 4) {
+    return false;
+  }
+
+  // kAirports is sorted by ident, so binary-search it.
+  const auto* airports = data::large_airports::kAirports;
+  size_t lo = 0;
+  size_t hi = data::large_airports::kAirportCount;
+  while (lo < hi) {
+    const size_t mid = lo + (hi - lo) / 2;
+    const int cmp = std::strcmp(airports[mid].ident, key);
+    if (cmp == 0) {
+      const double lat = static_cast<double>(airports[mid].lat_e7) * 1e-7;
+      const double lon = static_cast<double>(airports[mid].lon_e7) * 1e-7;
+      persist(lat, lon);
+      Serial.printf("Radar location set to %s: %.6f, %.6f\n", key, lat, lon);
+      return true;
+    }
+    if (cmp < 0) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  Serial.printf("ICAO %s not found in on-board dataset\n", key);
+  return false;
 }
 
 void clear() {

@@ -13,6 +13,15 @@ constexpr char kPortalIp[] = "192.168.4.1";
 constexpr char kPortalHostname[] = "plane-radar";
 constexpr char kPortalHostUrl[] = "plane-radar.local";
 
+/**
+ * HTTPS companion page that reads the phone GPS and hands the coordinates back
+ * to the device (browsers only expose geolocation over HTTPS, which the device
+ * itself cannot serve). Host docs/gps.html via GitHub Pages and point this URL
+ * at it. The device passes ?device=<ip> so the page can redirect back.
+ */
+constexpr char kGpsHelperUrl[] =
+    "https://nilsmeier1812.github.io/esp32-plane-radar/gps.html";
+
 /** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;
 constexpr uint8_t kWifiConnectAttempts = 3;

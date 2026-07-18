@@ -78,6 +78,17 @@ void rangeNext() {
   saveRangeIndex();
 }
 
+void rangeSetIndex(uint8_t index) {
+  if (index >= kRangePresetCount) {
+    index = static_cast<uint8_t>(kRangePresetCount - 1);
+  }
+  if (index == s_range_index) {
+    return;
+  }
+  s_range_index = index;
+  saveRangeIndex();
+}
+
 const RangePreset& rangeCurrent() { return kRangePresets[s_range_index]; }
 
 uint8_t rangeIndex() { return s_range_index; }

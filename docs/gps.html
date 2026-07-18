@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plane Radar — GPS</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0f0c;
+         color: #e6f2ea; padding: 16px; max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; } h1 span { color: #3ad07a; }
+  .sub { color: #7d8f84; font-size: .85rem; margin-bottom: 16px; }
+  .card { background: #121a15; border: 1px solid #1f2c24; border-radius: 14px;
+          padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: .8rem; color: #9fb0a5; margin: 4px 0; }
+  input { width: 100%; padding: 11px 12px; border-radius: 10px; font-size: 1rem;
+          background: #0b0f0c; border: 1px solid #263429; color: #e6f2ea; }
+  button { border: none; border-radius: 10px; padding: 13px 14px; font-size: 1rem;
+           font-weight: 600; background: #3ad07a; color: #04120a; width: 100%;
+           cursor: pointer; margin-top: 12px; }
+  button.ghost { background: #1c2a22; color: #cfe6d8; }
+  button:disabled { opacity: .5; }
+  .coords { font-variant-numeric: tabular-nums; font-size: 1.1rem; margin: 8px 0; }
+  .err { color: #ff8a80; font-size: .85rem; }
+  .hint { color: #7d8f84; font-size: .78rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>Plane <span>Radar</span> — Standort</h1>
+  <div class="sub">Diese Seite liest dein Handy-GPS (nur über HTTPS möglich) und
+    schickt die Koordinaten an dein Gerät im WLAN.</div>
+
+  <div class="card">
+    <label>Geräte-Adresse (IP oder Host im WLAN)</label>
+    <input id="device" placeholder="z.B. 192.168.1.42 oder plane-radar.local">
+    <button id="locate" onclick="locate()">📍 Meine Position ermitteln</button>
+    <div id="status" class="hint"></div>
+  </div>
+
+  <div class="card" id="result" style="display:none">
+    <div class="coords" id="coords"></div>
+    <button onclick="send()">An Gerät senden</button>
+    <div class="hint">Öffnet die Geräteseite mit den neuen Koordinaten.</div>
+  </div>
+
+<script>
+  let lat = null, lon = null;
+  const q = new URLSearchParams(location.search);
+  const dev = document.getElementById('device');
+  dev.value = q.get('device') || localStorage.getItem('pr_device') || '';
+
+  function setStatus(msg, err){
+    const s = document.getElementById('status');
+    s.textContent = msg; s.className = err ? 'err' : 'hint';
+  }
+  function locate(){
+    if(!navigator.geolocation){ setStatus('Kein GPS im Browser verfügbar.', true); return; }
+    setStatus('Standort wird ermittelt…');
+    document.getElementById('locate').disabled = true;
+    navigator.geolocation.getCurrentPosition(p => {
+      lat = p.coords.latitude; lon = p.coords.longitude;
+      document.getElementById('coords').textContent =
+        lat.toFixed(5) + ', ' + lon.toFixed(5);
+      document.getElementById('result').style.display = 'block';
+      setStatus('Position gefunden (±' + Math.round(p.coords.accuracy) + ' m).');
+      document.getElementById('locate').disabled = false;
+    }, e => {
+      setStatus('GPS-Fehler: ' + e.message, true);
+      document.getElementById('locate').disabled = false;
+    }, { enableHighAccuracy: true, timeout: 15000 });
+  }
+  function send(){
+    const host = dev.value.trim();
+    if(!host){ setStatus('Bitte Geräte-Adresse eingeben.', true); return; }
+    if(lat === null){ setStatus('Zuerst Position ermitteln.', true); return; }
+    localStorage.setItem('pr_device', host);
+    location.href = 'http://' + host + '/api/center?lat=' + lat.toFixed(6) +
+                   '&lon=' + lon.toFixed(6);
+  }
+</script>
+</body>
+</html>

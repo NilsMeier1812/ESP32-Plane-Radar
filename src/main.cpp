@@ -8,6 +8,7 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
+#include "services/config_server.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
@@ -109,6 +110,11 @@ void loop() {
     g_wifi_down_since = 0;
     if (!g_radar_visible) {
       showRadarIfConnected();
+    } else if (services::config_server::consumeChanged()) {
+      // Center/scale changed via the web UI: redraw now and refetch aircraft
+      // for the new center on the next tick.
+      g_last_adsb_fetch_ms = 0;
+      ui::radarDisplayDraw();
     } else if (millis() - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
       g_last_adsb_fetch_ms = millis();
       fetchAndDrawAircraft();
