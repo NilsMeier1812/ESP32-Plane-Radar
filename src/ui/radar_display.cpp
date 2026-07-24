@@ -488,21 +488,37 @@ void drawAircraft() {
   const size_t n = services::adsb::aircraftCount();
   const services::adsb::Aircraft* planes = services::adsb::aircraftList();
 
+  // Dead-reckon positions forward from the last fetch so movement stays smooth
+  // between (slower) network updates.
+  const unsigned long now = millis();
+  const unsigned long base = services::adsb::lastUpdateMillis();
+  float elapsed_s = 0.0f;
+  if (base != 0 && now >= base) {
+    elapsed_s = static_cast<float>(now - base) * 0.001f;
+    if (elapsed_s > config::kAircraftMaxExtrapolateSec) {
+      elapsed_s = config::kAircraftMaxExtrapolateSec;
+    }
+  }
+
   AircraftDrawItem items[services::adsb::kMaxAircraft];
   BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
   size_t draw_count = 0;
   size_t dot_count = 0;
 
   for (size_t i = 0; i < n; ++i) {
+    float lat = 0.0f;
+    float lon = 0.0f;
+    services::adsb::extrapolate(planes[i], elapsed_s, &lat, &lon);
+
     float dx_km = 0.0f;
     float dy_km = 0.0f;
     float dist_km = 0.0f;
-    offsetKmFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
+    offsetKmFromCenter(lat, lon, &dx_km, &dy_km, &dist_km);
 
     if (isInsideOuterRingKm(dist_km)) {
       int x = 0;
       int y = 0;
-      latLonToScreen(planes[i].lat, planes[i].lon, &x, &y);
+      latLonToScreen(lat, lon, &x, &y);
       items[draw_count].index = i;
       items[draw_count].x = x;
       items[draw_count].y = y;
@@ -513,8 +529,7 @@ void drawAircraft() {
 
     int dot_x = 0;
     int dot_y = 0;
-    if (!beyondRingEdgeDotFromLatLon(planes[i].lat, planes[i].lon, &dot_x,
-                                     &dot_y)) {
+    if (!beyondRingEdgeDotFromLatLon(lat, lon, &dot_x, &dot_y)) {
       continue;
     }
     dots[dot_count].x = dot_x;

@@ -5,6 +5,7 @@
 
 #include <ArduinoJson.h>
 
+#include <cmath>
 #include <cstring>
 
 #include "config.h"
@@ -20,7 +21,14 @@ constexpr unsigned long kRequestTimeoutMs = 10000;
 
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
+unsigned long s_last_update_ms = 0;
 PollFn s_poll_fn = nullptr;
+
+// Persistent TLS client + HTTP client so the connection to adsb.fi is kept
+// alive (setReuse) and the expensive TLS handshake is not repeated every fetch.
+WiFiClientSecure s_client;
+HTTPClient s_http;
+bool s_http_ready = false;
 
 void pollNetwork() {
   if (s_poll_fn != nullptr) {
@@ -205,6 +213,29 @@ size_t aircraftCount() { return s_aircraft_count; }
 
 const Aircraft* aircraftList() { return s_aircraft; }
 
+unsigned long lastUpdateMillis() { return s_last_update_ms; }
+
+void extrapolate(const Aircraft& ac, float elapsed_s, float* out_lat,
+                 float* out_lon) {
+  *out_lat = ac.lat;
+  *out_lon = ac.lon;
+  if (ac.gs_knots <= 0.0f || elapsed_s <= 0.0f) {
+    return;
+  }
+  constexpr float kDegToRad = 0.01745329252f;
+  constexpr float kKmPerDeg = 111.0f;
+  // gs_knots = nautical miles per hour.
+  const float dist_km = ac.gs_knots * kKmPerNm * (elapsed_s / 3600.0f);
+  const float track_rad = ac.track_deg * kDegToRad;
+  const float d_lat = (dist_km / kKmPerDeg) * cosf(track_rad);
+  const float cos_lat = cosf(ac.lat * kDegToRad);
+  const float d_lon = (cos_lat > 0.0001f)
+                          ? (dist_km / (kKmPerDeg * cos_lat)) * sinf(track_rad)
+                          : 0.0f;
+  *out_lat = ac.lat + d_lat;
+  *out_lon = ac.lon + d_lon;
+}
+
 bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   const float dist_nm = kmToNauticalMiles(fetch_radius_km);
 
@@ -215,30 +246,32 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   url += "/dist/";
   url += String(dist_nm, 1);
 
-  WiFiClientSecure client;
-  client.setInsecure();
+  if (!s_http_ready) {
+    s_client.setInsecure();
+    s_http.setReuse(true);  // keep the TLS connection alive between fetches
+    s_http_ready = true;
+  }
 
-  HTTPClient http;
-  if (!http.begin(client, url)) {
+  if (!s_http.begin(s_client, url)) {
     Serial.println("adsb: http.begin failed");
     return false;
   }
 
-  http.setTimeout(kRequestTimeoutMs);
-  const int code = performGetWithPoll(http);
+  s_http.setTimeout(kRequestTimeoutMs);
+  const int code = performGetWithPoll(s_http);
   if (code != HTTP_CODE_OK) {
     Serial.printf("adsb: HTTP %d\n", code);
-    http.end();
+    s_http.end();
     return false;
   }
 
   String payload;
-  if (!readResponseBodyWithPoll(http, payload)) {
+  if (!readResponseBodyWithPoll(s_http, payload)) {
     Serial.println("adsb: empty response");
-    http.end();
+    s_http.end();
     return false;
   }
-  http.end();
+  s_http.end();  // with setReuse(true) this keeps the socket open for next time
 
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, payload);
@@ -246,6 +279,9 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
     return false;
   }
+
+  // Snapshot time for dead-reckoning between fetches.
+  s_last_update_ms = millis();
 
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {

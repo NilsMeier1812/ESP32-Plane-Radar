@@ -20,6 +20,17 @@ constexpr size_t kMaxAircraft = 64;
 size_t aircraftCount();
 const Aircraft* aircraftList();
 
+/** millis() timestamp of the last successful fetch (0 if none yet). */
+unsigned long lastUpdateMillis();
+
+/**
+ * Dead-reckon `ac` forward `elapsed_s` seconds from its last reported fix using
+ * ground speed + track, writing the extrapolated position to out_lat/out_lon.
+ * Falls back to the reported position when speed/time is zero.
+ */
+void extrapolate(const Aircraft& ac, float elapsed_s, float* out_lat,
+                 float* out_lon);
+
 /** Hook invoked during long HTTP I/O (e.g. wifiLoop). Optional. */
 using PollFn = void (*)();
 void setPollFn(PollFn fn);

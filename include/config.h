@@ -57,8 +57,20 @@ constexpr bool kDisplayRgbOrder = true;
 constexpr double kDefaultRadarLat = 52.3676;
 constexpr double kDefaultRadarLon = 4.9041;
 
-/** Poll adsb.fi (API public limit: 1 req/s). */
-constexpr unsigned long kAdsbFetchIntervalMs = 3000;
+/** How often to fetch fresh data from adsb.fi (public API limit: 1 req/s). */
+constexpr unsigned long kAdsbFetchIntervalMs = 2000;
+/**
+ * Radar redraw interval (ms). Between fetches, aircraft are dead-reckoned from
+ * their last position + ground speed + track, so movement stays smooth at this
+ * rate without extra API calls. If a frame takes longer than this, redraws just
+ * run as fast as they can.
+ */
+constexpr unsigned long kRadarRedrawIntervalMs = 100;
+/**
+ * Cap on how far ahead an aircraft is dead-reckoned when data goes stale (e.g.
+ * fetch failures), so planes don't drift off indefinitely without a fresh fix.
+ */
+constexpr float kAircraftMaxExtrapolateSec = 15.0f;
 /** Legacy scale unused — fetch uses radar::fetchRadiusKm() to screen edge. */
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */

@@ -21,6 +21,7 @@ bool g_radar_visible = false;
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
+unsigned long g_last_draw_ms = 0;
 
 void showRadarIfConnected() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -50,14 +51,10 @@ void handleBootButton() {
   }
 }
 
-void fetchAndDrawAircraft() {
+void fetchAircraft() {
   const float fetch_km = ui::radar::fetchRadiusKm();
-  if (!services::adsb::fetchUpdate(services::location::lat(),
-                                   services::location::lon(), fetch_km)) {
-    handleBootButton();
-    return;
-  }
-  ui::radarDisplayRefreshAircraft();
+  services::adsb::fetchUpdate(services::location::lat(),
+                              services::location::lon(), fetch_km);
   handleBootButton();
 }
 
@@ -110,14 +107,22 @@ void loop() {
     g_wifi_down_since = 0;
     if (!g_radar_visible) {
       showRadarIfConnected();
-    } else if (services::config_server::consumeChanged()) {
-      // Center/scale changed via the web UI: redraw now and refetch aircraft
-      // for the new center on the next tick.
-      g_last_adsb_fetch_ms = 0;
-      ui::radarDisplayDraw();
-    } else if (millis() - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
-      g_last_adsb_fetch_ms = millis();
-      fetchAndDrawAircraft();
+    } else {
+      // Center/scale changed via the web UI: refetch for the new center asap.
+      if (services::config_server::consumeChanged()) {
+        g_last_adsb_fetch_ms = 0;
+      }
+      const unsigned long now = millis();
+      if (now - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
+        g_last_adsb_fetch_ms = now;
+        fetchAircraft();
+      }
+      // Redraw far more often than we fetch; aircraft are dead-reckoned between
+      // fetches so movement looks smooth.
+      if (now - g_last_draw_ms >= config::kRadarRedrawIntervalMs) {
+        g_last_draw_ms = now;
+        ui::radarDisplayRefreshAircraft();
+      }
     }
   }
 
