@@ -151,7 +151,7 @@ src/
 | GND | GND |
 | RST | GPIO **0** |
 | CS | GPIO **1** |
-| DC | GPIO **10** |
+| DC | GPIO **2** |
 | SDA (MOSI) | GPIO **3** |
 | SCL (SCLK) | GPIO **4** |
 | BOOT (user) | GPIO **9** |
