@@ -20,7 +20,7 @@ constexpr char kPortalHostUrl[] = "plane-radar.local";
  * at it. The device passes ?device=<ip> so the page can redirect back.
  */
 constexpr char kGpsHelperUrl[] =
-    "https://nilsmeier1812.github.io/esp32-plane-radar/gps.html";
+    "https://nilsmeier1812.github.io/ESP32-Plane-Radar/gps.html";
 
 /** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;
