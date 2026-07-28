@@ -9,6 +9,7 @@
 #include "hardware/display.h"
 #include "services/adsb_client.h"
 #include "services/config_server.h"
+#include "services/presence.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
 #include "services/wifi_setup.h"
@@ -146,6 +147,7 @@ void setup() {
   }
   services::location::init();
   services::tracking::init();
+  services::presence::init();
   ui::radar::rangeInit();
   services::adsb::setPollFn(wifiLoop);
 
@@ -158,6 +160,17 @@ void loop() {
   handleBootButton();
   const bool hinting = updateHoldHint();
   wifiLoop();
+
+  // Auto standby driven by the PC's heartbeats (runs before the standby
+  // early-return so a returning PC can wake the radar).
+  if (WiFi.status() == WL_CONNECTED) {
+    const services::presence::Edge ev = services::presence::update();
+    if (ev == services::presence::Edge::WentOffline && !g_standby) {
+      enterStandby();
+    } else if (ev == services::presence::Edge::WentOnline && g_standby) {
+      exitStandby();
+    }
+  }
 
   if (g_standby) {
     delay(10);

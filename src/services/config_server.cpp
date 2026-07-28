@@ -9,6 +9,7 @@
 #endif
 
 #include "config.h"
+#include "services/presence.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
 #include "ui/radar_range.h"
@@ -117,6 +118,15 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
       <input id="runways" type="checkbox" style="width:auto" onchange="setOptions()"></div>
   </div>
 
+  <div class="card">
+    <h2>Auto-Standby (PC)</h2>
+    <div class="toggle"><span>Standby, wenn PC offline</span>
+      <input id="presence" type="checkbox" style="width:auto" onchange="setOptions()"></div>
+    <div id="presencestatus" class="hint"></div>
+    <div class="hint" style="word-break:break-all">PC-Startskript ruft regelmäßig auf:<br>
+      <b id="presenceurl"></b></div>
+  </div>
+
   <div id="toast" class="toast"></div>
 <script>
 let S = {};
@@ -137,6 +147,10 @@ function render(){
   document.getElementById('track').value = S.track_target || '';
   const tsmap={off:'Kein Flug verfolgt',searching:'Suche…',tracking:'Wird verfolgt',lost:'Signal verloren'};
   document.getElementById('trackstatus').textContent = tsmap[S.track_state]||'';
+  document.getElementById('presence').checked = !!S.presence_enabled;
+  const pmap={off:'Deaktiviert',waiting:'Warte auf PC…',online:'PC online',offline:'PC offline'};
+  document.getElementById('presencestatus').textContent = 'Status: '+(pmap[S.presence_state]||S.presence_state);
+  document.getElementById('presenceurl').textContent = S.presence_url||'';
   const box = document.getElementById('scales'); box.innerHTML='';
   (S.presets||[]).forEach((km,i)=>{
     const b=document.createElement('button');
@@ -166,7 +180,8 @@ async function setScale(i){
 async function setOptions(){
   const r=await api('/api/options',{
     miles:document.getElementById('miles').checked,
-    runways:document.getElementById('runways').checked});
+    runways:document.getElementById('runways').checked,
+    presence:document.getElementById('presence').checked});
   if(r.ok){S=r.state;render();}
 }
 function useGps(){
@@ -209,6 +224,9 @@ void fillState(JsonObject o) {
     case services::tracking::State::Off: ts = "off"; break;
   }
   o["track_state"] = ts;
+  o["presence_enabled"] = services::presence::enabled();
+  o["presence_state"] = services::presence::stateStr();
+  o["presence_url"] = "http://" + WiFi.localIP().toString() + "/api/presence";
   JsonArray presets = o["presets"].to<JsonArray>();
   for (size_t i = 0; i < ui::radar::kRangePresetCount; ++i) {
     presets.add(ui::radar::kRangePresets[i].ring3_km);
@@ -304,8 +322,17 @@ void handleOptionsPost() {
   if (doc["runways"].is<bool>()) {
     ui::radar::saveRunwaysFromPortal(doc["runways"].as<bool>() ? "T" : "");
   }
+  if (doc["presence"].is<bool>()) {
+    services::presence::setEnabled(doc["presence"].as<bool>());
+  }
   s_changed = true;
   sendState(200, true, nullptr);
+}
+
+// Heartbeat from the PC: a simple GET the PC's start-up script hits regularly.
+void handlePresenceGet() {
+  services::presence::heartbeat();
+  s_server.send(200, "text/plain", "ok");
 }
 
 void handleTrackPost() {
@@ -345,6 +372,7 @@ void begin() {
   s_server.on("/api/scale", HTTP_POST, handleScalePost);
   s_server.on("/api/options", HTTP_POST, handleOptionsPost);
   s_server.on("/api/track", HTTP_POST, handleTrackPost);
+  s_server.on("/api/presence", HTTP_GET, handlePresenceGet);
   s_server.onNotFound(handlePage);
   s_server.begin();
   s_running = true;

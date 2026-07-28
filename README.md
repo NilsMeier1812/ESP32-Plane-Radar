@@ -49,12 +49,49 @@ While the device is on your Wi‑Fi it serves a small config page at **`http://p
 | **Scale** | Pick a range preset (5 / 10 / 15 / 25 km) |
 | **Track a flight** | Enter a callsign (e.g. `DLH400`) or registration; the radar centers on that aircraft and follows it. On signal loss it stays centered and shows a hint, reverting home after a longer outage. |
 | **Display** | Miles vs km, runway overlay on/off |
+| **Auto-standby (PC)** | Toggle "Standby when PC offline"; the radar mirrors your PC's power state via heartbeats (see below). |
 
 ### Phone GPS helper (`docs/gps.html`)
 
 Browsers only expose GPS over **HTTPS**, which the device (plain HTTP on the LAN) cannot serve. `docs/gps.html` is a static page meant to be hosted over HTTPS — enable **GitHub Pages** for the `/docs` folder, then point `config::kGpsHelperUrl` at it (default: `https://<user>.github.io/<repo>/gps.html`). The device’s “Aktuelle Position vom Handy” button opens it with `?device=<ip>`; the page reads GPS and redirects back to `http://<ip>/api/center?lat=…&lon=…`.
 
 After a Wi‑Fi reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
+
+### Auto-standby with your PC (heartbeat)
+
+Turn on **"Standby when PC offline"** on the companion page. Then have your PC hit the radar's heartbeat URL regularly:
+
+```
+http://<radar-ip>/api/presence
+```
+
+While heartbeats keep arriving the radar stays awake; if they stop for ~90 s (PC shut down or asleep) it drops to standby, and it wakes again on the next heartbeat. Give the radar a **fixed IP** (DHCP reservation) so the URL is stable — or use `http://plane-radar.local/api/presence` if your PC resolves mDNS.
+
+Set the PC to call it every ~30 s, started at logon:
+
+**Windows** — save as `radar-heartbeat.bat` and add it to Task Scheduler (trigger: *At log on*):
+```bat
+@echo off
+:loop
+curl -s http://<radar-ip>/api/presence >nul 2>&1
+timeout /t 30 /nobreak >nul
+goto loop
+```
+
+**Windows (PowerShell alternative)** — run at logon:
+```powershell
+while ($true) {
+  try { Invoke-WebRequest -UseBasicParsing "http://<radar-ip>/api/presence" -TimeoutSec 5 | Out-Null } catch {}
+  Start-Sleep -Seconds 30
+}
+```
+
+**Linux / macOS** — cron (`crontab -e`), fires each minute:
+```
+* * * * * curl -s http://<radar-ip>/api/presence >/dev/null 2>&1
+```
+
+Because standby is triggered by *missing* heartbeats, an ungraceful shutdown works too — the radar simply stops hearing from the PC and powers the screen down. Manual BOOT standby still works in between; the PC state re-asserts on its next on/off transition.
 
 ## Radar display
 

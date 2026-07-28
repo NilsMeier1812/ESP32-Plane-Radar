@@ -85,6 +85,13 @@ constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
 
+// --- PC presence (auto standby via heartbeat from the PC) ---
+/** No heartbeat for this long → the PC is considered offline. */
+constexpr unsigned long kPresenceTimeoutMs = 90000UL;
+/** After boot / enabling, wait this long for the first heartbeat before
+ *  dropping to standby (gives the PC's start-up script time to check in). */
+constexpr unsigned long kPresenceBootGraceMs = 60000UL;
+
 // --- Aircraft tracking (follow a callsign / registration) ---
 /** No fresh fix for the tracked aircraft this long → show "signal lost". */
 constexpr unsigned long kTrackSignalLostMs = 6000UL;
