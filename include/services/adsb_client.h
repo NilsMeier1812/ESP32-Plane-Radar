@@ -35,7 +35,19 @@ void extrapolate(const Aircraft& ac, float elapsed_s, float* out_lat,
 using PollFn = void (*)();
 void setPollFn(PollFn fn);
 
-/** Fetch aircraft within fetch_radius_km of center_lat/lon from adsb.fi. */
-bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km);
+/**
+ * Fetch aircraft within fetch_radius_km of center_lat/lon from adsb.fi.
+ * If match_key is set, scans the results for an aircraft whose callsign or
+ * registration equals it (upper-case), reporting via out_matched/out_lat/out_lon.
+ */
+bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km,
+                 const char* match_key = nullptr, bool* out_matched = nullptr,
+                 float* out_lat = nullptr, float* out_lon = nullptr);
+
+/**
+ * Locate an aircraft globally by callsign or registration (tries both).
+ * On success writes its position and returns true.
+ */
+bool locate(const char* target, float* out_lat, float* out_lon);
 
 }  // namespace services::adsb

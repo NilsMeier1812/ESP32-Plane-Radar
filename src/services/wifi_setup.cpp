@@ -21,6 +21,7 @@
 
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_boot_tap_pending = false;
+volatile bool s_boot_standby_pending = false;
 volatile bool s_boot_is_down = false;
 volatile unsigned long s_boot_down_ms = 0;
 bool s_long_press_handled = false;
@@ -35,9 +36,13 @@ void IRAM_ATTR onBootButtonIsr() {
     s_boot_down_ms = now;
   } else if (s_boot_is_down) {
     const unsigned long held = now - s_boot_down_ms;
-    if (held >= config::kBootTapMinMs && held < config::kBootResetHoldMs) {
-      s_boot_tap_pending = true;
+    if (held >= config::kBootTapMinMs && held < config::kBootStandbyHoldMs) {
+      s_boot_tap_pending = true;  // short tap → zoom
+    } else if (held >= config::kBootStandbyHoldMs &&
+               held < config::kBootResetWarnMs) {
+      s_boot_standby_pending = true;  // medium hold → standby toggle
     }
+    // held in [warn, reset): released during the reset warning → no action
     s_boot_is_down = false;
   }
   portEXIT_CRITICAL_ISR(&s_boot_mux);
@@ -346,6 +351,28 @@ bool bootButtonConsumeTap() {
   }
   portEXIT_CRITICAL(&s_boot_mux);
   return tap;
+}
+
+bool bootButtonConsumeStandby() {
+  portENTER_CRITICAL(&s_boot_mux);
+  const bool s = s_boot_standby_pending;
+  if (s) {
+    s_boot_standby_pending = false;
+  }
+  portEXIT_CRITICAL(&s_boot_mux);
+  return s;
+}
+
+unsigned long bootButtonHeldMs() {
+  portENTER_CRITICAL(&s_boot_mux);
+  const bool down = s_boot_is_down;
+  const unsigned long since = s_boot_down_ms;
+  portEXIT_CRITICAL(&s_boot_mux);
+  if (!down) {
+    return 0;
+  }
+  const unsigned long now = millis();
+  return (now >= since) ? (now - since) : 0;
 }
 
 void bootButtonPollLongPress() {

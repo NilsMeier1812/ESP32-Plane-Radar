@@ -8,6 +8,7 @@
 #include "data/large_airports.h"
 #include "hardware/display_font.h"
 #include "services/radar_location.h"
+#include "services/tracking.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 
@@ -74,9 +75,9 @@ float e7ToDeg(int32_t e7) { return static_cast<float>(e7) * 1e-7f; }
 void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                         float* dist_km) {
   *dx_km =
-      static_cast<float>(lon - services::location::lon()) * kKmPerDeg;
+      static_cast<float>(lon - services::tracking::centerLon()) * kKmPerDeg;
   *dy_km =
-      static_cast<float>(lat - services::location::lat()) * kKmPerDeg;
+      static_cast<float>(lat - services::tracking::centerLat()) * kKmPerDeg;
   *dist_km = sqrtf((*dx_km) * (*dx_km) + (*dy_km) * (*dy_km));
 }
 

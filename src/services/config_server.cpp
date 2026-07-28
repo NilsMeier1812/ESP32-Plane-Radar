@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "services/radar_location.h"
+#include "services/tracking.h"
 #include "ui/radar_range.h"
 
 namespace services::config_server {
@@ -98,6 +99,17 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card">
+    <h2>Flug verfolgen</h2>
+    <div class="row">
+      <input id="track" placeholder="Callsign / Kennzeichen (z.B. DLH400)"
+             autocapitalize="characters" autocomplete="off">
+      <button style="flex:0 0 auto" onclick="trackStart()">Verfolgen</button>
+    </div>
+    <button class="ghost mt" style="width:100%" onclick="trackStop()">Tracking stoppen</button>
+    <div id="trackstatus" class="hint"></div>
+  </div>
+
+  <div class="card">
     <h2>Anzeige</h2>
     <div class="toggle"><span>Entfernungen in Meilen</span>
       <input id="miles" type="checkbox" style="width:auto" onchange="setOptions()"></div>
@@ -122,6 +134,9 @@ function render(){
   document.getElementById('lon').value = fmt(S.lon);
   document.getElementById('miles').checked = !!S.use_miles;
   document.getElementById('runways').checked = !!S.show_runways;
+  document.getElementById('track').value = S.track_target || '';
+  const tsmap={off:'Kein Flug verfolgt',searching:'Suche…',tracking:'Wird verfolgt',lost:'Signal verloren'};
+  document.getElementById('trackstatus').textContent = tsmap[S.track_state]||'';
   const box = document.getElementById('scales'); box.innerHTML='';
   (S.presets||[]).forEach((km,i)=>{
     const b=document.createElement('button');
@@ -159,6 +174,16 @@ function useGps(){
               encodeURIComponent(S.ip);
   window.location.href = url;
 }
+async function trackStart(){
+  const v=document.getElementById('track').value.trim();
+  if(!v) return;
+  const r=await api('/api/track',{target:v});
+  if(r.ok){S=r.state;render();toast('Verfolge '+v.toUpperCase());} else toast(r.msg||'Fehler');
+}
+async function trackStop(){
+  const r=await api('/api/track',{stop:true});
+  if(r.ok){S=r.state;render();toast('Tracking gestoppt');}
+}
 load();
 </script>
 </body>
@@ -174,6 +199,16 @@ void fillState(JsonObject o) {
   o["show_runways"] = ui::radar::showRunways();
   o["ip"] = WiFi.localIP().toString();
   o["gps_helper"] = config::kGpsHelperUrl;
+  o["track_active"] = services::tracking::active();
+  o["track_target"] = services::tracking::target();
+  const char* ts = "off";
+  switch (services::tracking::state()) {
+    case services::tracking::State::Searching: ts = "searching"; break;
+    case services::tracking::State::Tracking: ts = "tracking"; break;
+    case services::tracking::State::Lost: ts = "lost"; break;
+    case services::tracking::State::Off: ts = "off"; break;
+  }
+  o["track_state"] = ts;
   JsonArray presets = o["presets"].to<JsonArray>();
   for (size_t i = 0; i < ui::radar::kRangePresetCount; ++i) {
     presets.add(ui::radar::kRangePresets[i].ring3_km);
@@ -273,6 +308,28 @@ void handleOptionsPost() {
   sendState(200, true, nullptr);
 }
 
+void handleTrackPost() {
+  JsonDocument doc;
+  if (deserializeJson(doc, s_server.arg("plain"))) {
+    sendState(400, false, "Ungültige Anfrage");
+    return;
+  }
+  if (doc["stop"].is<bool>() && doc["stop"].as<bool>()) {
+    services::tracking::stop();
+    s_changed = true;
+    sendState(200, true, nullptr);
+    return;
+  }
+  const char* t = doc["target"] | "";
+  if (t[0] == '\0') {
+    sendState(400, false, "Callsign oder Kennzeichen erforderlich");
+    return;
+  }
+  services::tracking::start(t);
+  s_changed = true;
+  sendState(200, true, nullptr);
+}
+
 void handlePage() { s_server.send_P(200, "text/html; charset=utf-8", kPage); }
 
 }  // namespace
@@ -287,6 +344,7 @@ void begin() {
   s_server.on("/api/center", HTTP_POST, handleCenterPost);
   s_server.on("/api/scale", HTTP_POST, handleScalePost);
   s_server.on("/api/options", HTTP_POST, handleOptionsPost);
+  s_server.on("/api/track", HTTP_POST, handleTrackPost);
   s_server.onNotFound(handlePage);
   s_server.begin();
   s_running = true;

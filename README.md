@@ -18,9 +18,12 @@ After Wi‑Fi is saved, the device reconnects automatically; the radar runs in t
 | Action | Effect |
 |--------|--------|
 | **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
-| **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
+| **Hold ~1.5 s** | Toggle **standby** (screen off + polling paused; hold again to wake) |
+| **Hold ~10 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
-During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+While holding, the screen shows which action will trigger on release. Standby is a low-power pause — the ESP32 keeps running but the panel sleeps and ADS‑B polling stops, so you can "switch it off" without pulling the cable. (The display has no separate backlight pin, so the backlight itself may stay dimly lit.)
+
+During setup you can also hold BOOT at power-on to force a credential reset.
 
 ## Wi‑Fi setup portal
 
@@ -44,6 +47,7 @@ While the device is on your Wi‑Fi it serves a small config page at **`http://p
 | **Center — coordinates** | Enter latitude / longitude directly |
 | **Center — phone GPS** | Opens the HTTPS helper page (below), which reads the phone’s location and sends it back |
 | **Scale** | Pick a range preset (5 / 10 / 15 / 25 km) |
+| **Track a flight** | Enter a callsign (e.g. `DLH400`) or registration; the radar centers on that aircraft and follows it. On signal loss it stays centered and shows a hint, reverting home after a longer outage. |
 | **Display** | Miles vs km, runway overlay on/off |
 
 ### Phone GPS helper (`docs/gps.html`)

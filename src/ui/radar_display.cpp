@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "config.h"
@@ -11,6 +12,7 @@
 #include "hardware/display_font.h"
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
+#include "services/tracking.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
@@ -204,9 +206,9 @@ constexpr float kKmPerDeg = 111.0f;
 void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                         float* dist_km) {
   *dx_km =
-      static_cast<float>(lon - services::location::lon()) * kKmPerDeg;
+      static_cast<float>(lon - services::tracking::centerLon()) * kKmPerDeg;
   *dy_km =
-      static_cast<float>(lat - services::location::lat()) * kKmPerDeg;
+      static_cast<float>(lat - services::tracking::centerLat()) * kKmPerDeg;
   *dist_km = sqrtf((*dx_km) * (*dx_km) + (*dy_km) * (*dy_km));
 }
 
@@ -671,6 +673,46 @@ void drawStaticGrid(Gfx& gfx) {
   gfx.setTextDatum(textdatum_t::top_left);
 }
 
+void drawTrackingOverlay() {
+  const services::tracking::State st = services::tracking::state();
+  if (st == services::tracking::State::Off) {
+    return;
+  }
+
+  // Ring around the centre (where the tracked aircraft sits) while it's live.
+  if (st == services::tracking::State::Tracking) {
+    constexpr int kHighlightR = 13;
+    s_draw->drawCircle(radar::kCenterX, radar::kCenterY, kHighlightR,
+                       radar::kColorTrackVector);
+    s_draw->drawCircle(radar::kCenterX, radar::kCenterY, kHighlightR + 1,
+                       radar::kColorTrackVector);
+  }
+
+  char banner[24];
+  const char* tgt = services::tracking::target();
+  if (st == services::tracking::State::Searching) {
+    snprintf(banner, sizeof(banner), "Suche %s", tgt);
+  } else if (st == services::tracking::State::Lost) {
+    snprintf(banner, sizeof(banner), "%s verloren", tgt);
+  } else {
+    snprintf(banner, sizeof(banner), "TRK %s", tgt);
+  }
+
+  initTagLabelMetrics();
+  applyTagStyle();
+  s_draw->setTextDatum(textdatum_t::top_center);
+  const int th = s_draw->fontHeight();
+  const int tw = s_draw->textWidth(banner);
+  constexpr int kBannerTopY = 8;
+  s_draw->fillRect(radar::kCenterX - tw / 2 - 3, kBannerTopY - 1, tw + 6, th + 2,
+                   radar::kColorBackground);
+  const uint16_t col = (st == services::tracking::State::Lost)
+                           ? radar::kColorTagAltitude
+                           : radar::kColorRunwayLabel;
+  s_draw->setTextColor(col, radar::kColorBackground);
+  s_draw->drawString(banner, radar::kCenterX, kBannerTopY);
+}
+
 bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
@@ -692,6 +734,7 @@ void renderFrame() {
   {
     const DrawScope scope(s_frame);
     drawAircraft();
+    drawTrackingOverlay();
   }
   s_frame.pushSprite(0, 0);
   tft.setTextDatum(textdatum_t::top_left);

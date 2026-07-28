@@ -5,6 +5,7 @@
 
 #include <ArduinoJson.h>
 
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -205,6 +206,61 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   formatAltitudeTag(plane, ac->alt, sizeof(ac->alt));
 }
 
+// True if plane[field] equals key ignoring case and trailing spaces.
+bool fieldMatches(const JsonObject& plane, const char* field, const char* key) {
+  if (!plane[field].is<const char*>()) {
+    return false;
+  }
+  const char* s = plane[field].as<const char*>();
+  char buf[16];
+  size_t n = 0;
+  for (const char* c = s; *c != '\0' && n < sizeof(buf) - 1; ++c) {
+    if (*c == ' ') {
+      continue;
+    }
+    buf[n++] = static_cast<char>(std::toupper(static_cast<unsigned char>(*c)));
+  }
+  buf[n] = '\0';
+  return std::strcmp(buf, key) == 0;
+}
+
+bool planeMatches(const JsonObject& plane, const char* key) {
+  return fieldMatches(plane, "flight", key) || fieldMatches(plane, "r", key);
+}
+
+bool httpGetJson(const String& url, JsonDocument& doc) {
+  if (!s_http_ready) {
+    s_client.setInsecure();
+    s_http.setReuse(true);  // keep the TLS connection alive between requests
+    s_http_ready = true;
+  }
+  if (!s_http.begin(s_client, url)) {
+    Serial.println("adsb: http.begin failed");
+    return false;
+  }
+  s_http.setTimeout(kRequestTimeoutMs);
+  const int code = performGetWithPoll(s_http);
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("adsb: HTTP %d\n", code);
+    s_http.end();
+    return false;
+  }
+  String payload;
+  if (!readResponseBodyWithPoll(s_http, payload)) {
+    Serial.println("adsb: empty response");
+    s_http.end();
+    return false;
+  }
+  s_http.end();  // with setReuse(true) this keeps the socket open for next time
+
+  const DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 void setPollFn(PollFn fn) { s_poll_fn = fn; }
@@ -236,7 +292,9 @@ void extrapolate(const Aircraft& ac, float elapsed_s, float* out_lat,
   *out_lon = ac.lon + d_lon;
 }
 
-bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
+bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km,
+                 const char* match_key, bool* out_matched, float* out_lat,
+                 float* out_lon) {
   const float dist_nm = kmToNauticalMiles(fetch_radius_km);
 
   String url = kApiBase;
@@ -246,37 +304,12 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   url += "/dist/";
   url += String(dist_nm, 1);
 
-  if (!s_http_ready) {
-    s_client.setInsecure();
-    s_http.setReuse(true);  // keep the TLS connection alive between fetches
-    s_http_ready = true;
+  if (out_matched != nullptr) {
+    *out_matched = false;
   }
-
-  if (!s_http.begin(s_client, url)) {
-    Serial.println("adsb: http.begin failed");
-    return false;
-  }
-
-  s_http.setTimeout(kRequestTimeoutMs);
-  const int code = performGetWithPoll(s_http);
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("adsb: HTTP %d\n", code);
-    s_http.end();
-    return false;
-  }
-
-  String payload;
-  if (!readResponseBodyWithPoll(s_http, payload)) {
-    Serial.println("adsb: empty response");
-    s_http.end();
-    return false;
-  }
-  s_http.end();  // with setReuse(true) this keeps the socket open for next time
 
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, payload);
-  if (err) {
-    Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
+  if (!httpGetJson(url, doc)) {
     return false;
   }
 
@@ -289,6 +322,9 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     return true;
   }
 
+  const bool want_match =
+      match_key != nullptr && match_key[0] != '\0' && out_matched != nullptr;
+
   size_t n = 0;
   for (JsonObject plane : ac) {
     if (n >= kMaxAircraft) {
@@ -297,12 +333,26 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     if (!plane["lat"].is<float>() || !plane["lon"].is<float>()) {
       continue;
     }
+    const float lat = plane["lat"].as<float>();
+    const float lon = plane["lon"].as<float>();
+
+    // Match the tracked target even if it is on the ground (just landed).
+    if (want_match && !*out_matched && planeMatches(plane, match_key)) {
+      *out_matched = true;
+      if (out_lat != nullptr) {
+        *out_lat = lat;
+      }
+      if (out_lon != nullptr) {
+        *out_lon = lon;
+      }
+    }
+
     if (isOnGround(plane) && !config::kAdsbShowGroundAircraft) {
       continue;
     }
 
-    s_aircraft[n].lat = plane["lat"].as<float>();
-    s_aircraft[n].lon = plane["lon"].as<float>();
+    s_aircraft[n].lat = lat;
+    s_aircraft[n].lon = lon;
     s_aircraft[n].nose_deg = pickNoseHeading(plane);
     s_aircraft[n].track_deg = pickTrackHeading(plane);
     s_aircraft[n].gs_knots = pickGroundSpeed(plane);
@@ -313,6 +363,42 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   s_aircraft_count = n;
   Serial.printf("adsb: %u aircraft\n", static_cast<unsigned>(n));
   return true;
+}
+
+namespace {
+
+bool locateVia(const char* base, const char* target, float* out_lat,
+               float* out_lon) {
+  String url = base;
+  url += target;
+  JsonDocument doc;
+  if (!httpGetJson(url, doc)) {
+    return false;
+  }
+  JsonArray ac = doc["ac"].as<JsonArray>();
+  if (ac.isNull()) {
+    return false;
+  }
+  for (JsonObject plane : ac) {
+    if (plane["lat"].is<float>() && plane["lon"].is<float>()) {
+      *out_lat = plane["lat"].as<float>();
+      *out_lon = plane["lon"].as<float>();
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+bool locate(const char* target, float* out_lat, float* out_lon) {
+  if (target == nullptr || target[0] == '\0') {
+    return false;
+  }
+  if (locateVia(config::kAdsbCallsignUrl, target, out_lat, out_lon)) {
+    return true;
+  }
+  return locateVia(config::kAdsbRegistrationUrl, target, out_lat, out_lon);
 }
 
 }  // namespace services::adsb

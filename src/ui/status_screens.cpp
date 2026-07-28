@@ -226,10 +226,21 @@ void statusScreenConnectFailed() {
       {"Could not connect", 1.15f, &kGfxTitle},
       {"Check Wi-Fi password", 1.0f, &kGfxBody},
       {"and signal strength.", 1.0f, &kGfxBody},
-      {"Hold BOOT 3 sec", 1.0f, &kGfxBody},
+      {"Hold BOOT 10 sec", 1.0f, &kGfxBody},
       {"to reset Wi-Fi", 1.0f, &kGfxBody},
   };
   drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
+                sizeof(lines) / sizeof(lines[0]));
+}
+
+void statusScreenStandby() { tft.fillScreen(config::kColorBlack); }
+
+void statusScreenHoldHint(const char* line1, const char* line2) {
+  const TextLine lines[] = {
+      {line1, 1.05f, &kGfxBody},
+      {line2, 1.15f, &kGfxTitle},
+  };
+  drawTextBlock(config::kColorBlack, config::kTextOnBlack, lines,
                 sizeof(lines) / sizeof(lines[0]));
 }
 

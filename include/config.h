@@ -33,10 +33,19 @@ constexpr unsigned long kWifiDownGraceMs = 4000;
 constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 
 // --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
+// Gesture tiers, classified by how long BOOT is held:
+//   tap  (< standby)         → cycle zoom range
+//   hold (standby .. reset)  → toggle standby (screen off / activity paused)
+//   hold (>= reset)          → Wi-Fi reset + reboot
 constexpr gpio_num_t kBootPin = GPIO_NUM_9;
-constexpr unsigned long kBootResetHoldMs = 3000UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
+/** Hold at least this long (but less than reset) to toggle standby. */
+constexpr unsigned long kBootStandbyHoldMs = 1500UL;
+/** Show the "keep holding for Wi-Fi reset" hint from here. */
+constexpr unsigned long kBootResetWarnMs = 8000UL;
+/** Hold this long to wipe Wi-Fi credentials and reboot. */
+constexpr unsigned long kBootResetHoldMs = 10000UL;
 
 // --- Display: GC9A01 1.28" round 240×240 (SPI) ---
 constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_0;
@@ -75,6 +84,16 @@ constexpr float kAircraftMaxExtrapolateSec = 15.0f;
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+// --- Aircraft tracking (follow a callsign / registration) ---
+/** No fresh fix for the tracked aircraft this long → show "signal lost". */
+constexpr unsigned long kTrackSignalLostMs = 6000UL;
+/** Lost this long → recenter on the home location (tracking stays armed). */
+constexpr unsigned long kTrackRevertHomeMs = 90000UL;
+/** adsb.fi lookup endpoints for locating a target by callsign / registration. */
+constexpr char kAdsbCallsignUrl[] = "https://opendata.adsb.fi/api/v2/callsign/";
+constexpr char kAdsbRegistrationUrl[] =
+    "https://opendata.adsb.fi/api/v2/registration/";
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

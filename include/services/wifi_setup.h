@@ -14,5 +14,9 @@ bool wifiBootButtonPressed();
 void bootButtonInit();
 /** Latched short tap (survives blocking HTTP/display work). */
 bool bootButtonConsumeTap();
+/** Latched medium hold (standby toggle). */
+bool bootButtonConsumeStandby();
+/** How long BOOT has currently been held (0 when released). */
+unsigned long bootButtonHeldMs();
 /** Call each loop iteration; triggers WiFi reset on long hold. */
 void bootButtonPollLongPress();
