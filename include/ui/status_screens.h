@@ -9,6 +9,12 @@ void statusScreenStandby();
 /** Two-line hint shown while the BOOT button is held (gesture feedback). */
 void statusScreenHoldHint(const char* line1, const char* line2);
 
+/**
+ * Shown briefly after a successful connect: SSID plus both addresses of the
+ * config page, so the IP is known even when mDNS (plane-radar.local) fails.
+ */
+void statusScreenConnected(const char* ssid, const char* host, const char* ip);
+
 /** Saved-network connect animation (call Tick until connect finishes). */
 void statusScreenConnectingBegin(const char* ssid);
 void statusScreenConnectingTick();

@@ -18,6 +18,13 @@ void begin();
 /** Stop the server + mDNS (e.g. when the Wi-Fi link drops). */
 void stop();
 
+/**
+ * Restart the mDNS responder (leaving the HTTP server untouched). Called after
+ * a reconnect: the responder is bound to the old netif state and stops
+ * answering for plane-radar.local until it is set up again.
+ */
+void announce();
+
 bool running();
 
 /** Service pending HTTP clients; call every loop iteration while connected. */

@@ -221,11 +221,26 @@ void statusScreenPortal() {
                 sizeof(lines) / sizeof(lines[0]));
 }
 
+void statusScreenConnected(const char* ssid, const char* host, const char* ip) {
+  char ssid_buf[33];
+  strncpy(ssid_buf, (ssid != nullptr) ? ssid : "", sizeof(ssid_buf) - 1);
+  ssid_buf[sizeof(ssid_buf) - 1] = '\0';
+
+  const TextLine lines[] = {
+      {"Connected", 1.15f, &kGfxTitle},
+      {ssid_buf, 0.92f, &kConnectingGfxDetail},
+      {(host != nullptr) ? host : "", 1.0f, &kGfxBody},
+      {(ip != nullptr) ? ip : "", 1.0f, &kGfxBody},
+  };
+  drawTextBlock(config::kColorBlack, config::kTextOnBlack, lines,
+                sizeof(lines) / sizeof(lines[0]));
+}
+
 void statusScreenConnectFailed() {
   const TextLine lines[] = {
       {"Could not connect", 1.15f, &kGfxTitle},
-      {"Check Wi-Fi password", 1.0f, &kGfxBody},
-      {"and signal strength.", 1.0f, &kGfxBody},
+      {"Retrying...", 1.0f, &kGfxBody},
+      {"Check signal strength.", 1.0f, &kGfxBody},
       {"Hold BOOT 10 sec", 1.0f, &kGfxBody},
       {"to reset Wi-Fi", 1.0f, &kGfxBody},
   };

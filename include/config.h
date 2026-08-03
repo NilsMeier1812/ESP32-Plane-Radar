@@ -27,10 +27,35 @@ constexpr unsigned long kWifiConnectAttemptMs = 15000;
 constexpr uint8_t kWifiConnectAttempts = 3;
 constexpr unsigned long kWifiPortalTimeoutSec = 0;  // 0 = no timeout while configuring
 constexpr unsigned long kWifiConnectingFrameMs = 50;
-/** Wait after disconnect before reconnecting (avoids portal on brief drops). */
-constexpr unsigned long kWifiDownGraceMs = 4000;
+/** Wait after disconnect before reconnecting (avoids churn on brief drops). */
+constexpr unsigned long kWifiDownGraceMs = 2000;
 /** Minimum interval between background reconnect tries. */
-constexpr unsigned long kWifiReconnectIntervalMs = 15000;
+constexpr unsigned long kWifiReconnectIntervalMs = 3000;
+/**
+ * Soft reconnects (WiFi.reconnect(), radio state kept, no screen change) tried
+ * before falling back to a full re-begin with the "Connecting" screen. Most
+ * drops are the AP kicking us off for a moment and recover on the first try.
+ */
+constexpr uint8_t kWifiSoftReconnectTries = 5;
+constexpr unsigned long kWifiSoftReconnectWaitMs = 5000;
+/** How long the connect info (SSID / hostname / IP) stays up after connecting. */
+constexpr unsigned long kWifiConnectedInfoMs = 2500;
+
+// --- Wi-Fi radio ---
+/**
+ * TX power in the wifi_power_t scale (quarter dBm): 34 = 8.5 dBm,
+ * 52 = 13 dBm, 60 = 15 dBm, 78 = 19.5 dBm (max).
+ *
+ * The ESP32-C3 SuperMini has a weak on-board antenna, so the previous 8.5 dBm
+ * setting only holds a link close to the access point — the main cause of
+ * random drops and of the web page appearing offline. 15 dBm gives far more
+ * headroom while staying below the peak current that makes marginal USB
+ * supplies brown out. If the board resets while connecting, step this back
+ * down (52, then 34).
+ */
+constexpr int8_t kWifiTxPowerSta = 60;
+/** The setup portal is used at arm's length — keep the gentle setting there. */
+constexpr int8_t kWifiTxPowerAp = 34;
 
 // --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
 // Gesture tiers, classified by how long BOOT is held:

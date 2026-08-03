@@ -63,10 +63,16 @@ namespace {
 /** Separate from planeradar prefs (rangeInit) to avoid NVS handle conflicts. */
 constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
+/** Sticky "this device has been through the setup portal once" marker. */
+constexpr char kPrefsConfiguredKey[] = "cfgd";
 
 bool s_force_config_portal = false;
 WiFiManager s_wm;
 bool s_wm_configured = false;
+bool s_events_registered = false;
+/** Set by the GOT_IP event; makes wifiLoop re-announce mDNS after a reconnect. */
+volatile bool s_link_up_pending = false;
+uint8_t s_soft_reconnect_tries = 0;
 
 void ensureWifiManager();
 bool wifiLinkUp();
@@ -159,6 +165,40 @@ bool consumeForceConfigPortal() {
   return true;
 }
 
+/**
+ * Remembered across reboots so a momentary read-back glitch of the STA config
+ * can never drop a configured device onto the setup screen.
+ */
+void markConfigured() {
+  Preferences prefs;
+  if (!prefs.begin(kWifiPrefsNamespace, false)) {
+    return;
+  }
+  if (!prefs.getBool(kPrefsConfiguredKey, false)) {
+    prefs.putBool(kPrefsConfiguredKey, true);
+  }
+  prefs.end();
+}
+
+bool everConfigured() {
+  Preferences prefs;
+  if (!prefs.begin(kWifiPrefsNamespace, true)) {
+    return false;
+  }
+  const bool configured = prefs.getBool(kPrefsConfiguredKey, false);
+  prefs.end();
+  return configured;
+}
+
+void clearConfigured() {
+  Preferences prefs;
+  if (!prefs.begin(kWifiPrefsNamespace, false)) {
+    return;
+  }
+  prefs.remove(kPrefsConfiguredKey);
+  prefs.end();
+}
+
 bool storedWifiCredentials() {
   wifi_mode_t mode = WIFI_MODE_NULL;
   if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
@@ -193,13 +233,14 @@ void eraseWifiCredentials() {
 void resetWifiCredentials() {
   markForceConfigPortal();
   eraseWifiCredentials();
+  clearConfigured();
   services::location::clear();
   ui::radar::unitsReset();
   Serial.println("WiFi credentials, location, and units cleared");
 }
 
 void onConfigPortalApStarted(WiFiManager*) {
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  WiFi.setTxPower(static_cast<wifi_power_t>(config::kWifiTxPowerAp));
   statusScreenPortal();
 #ifdef WM_MDNS
   if (MDNS.begin(config::kPortalHostname)) {
@@ -219,7 +260,69 @@ bool wifiLinkUp() {
          WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
+const char* disconnectReasonName(uint8_t reason) {
+  switch (reason) {
+    case WIFI_REASON_AUTH_EXPIRE: return "auth expired";
+    case WIFI_REASON_AUTH_LEAVE: return "auth leave";
+    case WIFI_REASON_ASSOC_EXPIRE: return "assoc expired";
+    case WIFI_REASON_ASSOC_TOOMANY: return "AP full";
+    case WIFI_REASON_NOT_AUTHED: return "not authed";
+    case WIFI_REASON_NOT_ASSOCED: return "not assoced";
+    case WIFI_REASON_ASSOC_LEAVE: return "assoc leave";
+    case WIFI_REASON_BEACON_TIMEOUT: return "beacon timeout (weak signal)";
+    case WIFI_REASON_NO_AP_FOUND: return "AP not found";
+    case WIFI_REASON_AUTH_FAIL: return "auth failed";
+    case WIFI_REASON_ASSOC_FAIL: return "assoc failed";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return "handshake timeout (wrong password?)";
+    case WIFI_REASON_CONNECTION_FAIL: return "connection failed";
+    default: return "other";
+  }
+}
+
+/**
+ * Radio settings that must survive every (re)connect. Modem sleep in
+ * particular is why the config page often looks offline: with power save on,
+ * the ESP misses packets between beacons and both mDNS queries and HTTP
+ * requests get dropped.
+ */
+void applyRadioSettings() {
+  WiFi.setSleep(WIFI_PS_NONE);
+  WiFi.setTxPower(static_cast<wifi_power_t>(config::kWifiTxPowerSta));
+}
+
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      applyRadioSettings();
+      s_soft_reconnect_tries = 0;
+      s_link_up_pending = true;
+      Serial.printf("WiFi up: %s  IP %s  RSSI %d dBm\n", WiFi.SSID().c_str(),
+                    WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      break;
+    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+      Serial.println("WiFi: lost IP lease");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+      const uint8_t reason = info.wifi_sta_disconnected.reason;
+      Serial.printf("WiFi down: reason %u (%s)\n", reason,
+                    disconnectReasonName(reason));
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void ensureWifiEvents() {
+  if (s_events_registered) {
+    return;
+  }
+  WiFi.onEvent(onWifiEvent);
+  s_events_registered = true;
+}
+
 void ensureWifiManager() {
+  ensureWifiEvents();
   if (s_wm_configured) {
     return;
   }
@@ -233,9 +336,13 @@ void ensureWifiManager() {
 }
 
 void prepareSta() {
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  ensureWifiEvents();
+  WiFi.persistent(true);  // keep credentials in NVS across reboots
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE);
+  // Announce a DHCP hostname so the router can resolve "plane-radar" even on
+  // networks where mDNS is filtered (many mesh/repeater setups).
+  WiFi.setHostname(config::kPortalHostname);
+  applyRadioSettings();
   WiFi.setAutoReconnect(true);
 }
 
@@ -275,8 +382,10 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
     if (attempt > 1) {
       Serial.printf("WiFi connect retry %u/%u\n", attempt,
                     config::kWifiConnectAttempts);
-      WiFi.disconnect(true);
-      WiFi.mode(WIFI_OFF);
+      // Drop the association but keep the radio on: powering it down between
+      // attempts loses the STA config and made a flaky AP look like "no
+      // credentials", which is what pushed the device onto the setup screen.
+      WiFi.disconnect(false);
       delay(400);
     }
 
@@ -290,11 +399,24 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
   return false;
 }
 
-bool connectSavedNetwork(bool show_ui) {
-  if (!storedWifiCredentials()) {
-    return false;
+/**
+ * Serial log + a short on-screen card with SSID, hostname and IP. The IP is
+ * the fallback for networks where mDNS never resolves (mesh repeaters, guest
+ * VLANs, Android clients), so it is worth showing every time we connect.
+ */
+void announceConnected() {
+  const String ip = WiFi.localIP().toString();
+  Serial.printf("Connected: %s  IP %s  RSSI %d dBm\n", WiFi.SSID().c_str(),
+                ip.c_str(), WiFi.RSSI());
+  statusScreenConnected(WiFi.SSID().c_str(), config::kPortalHostUrl, ip.c_str());
+  const unsigned long until = millis() + config::kWifiConnectedInfoMs;
+  while (millis() < until) {
+    bootButtonPollLongPress();
+    delay(20);
   }
+}
 
+bool connectSavedNetwork(bool show_ui) {
   ensureWifiManager();
   const String ssid = s_wm.getWiFiSSID();
   if (ssid.length() == 0) {
@@ -408,15 +530,54 @@ void wifiResetCredentialsAndReboot() {
 
 bool wifiReconnect() {
   initBootButton();
-  Serial.println("WiFi reconnecting...");
-  return connectSavedNetwork(true);
+  ensureWifiManager();
+
+  // Tier 1 — soft: ask the supplicant to re-associate with the network it
+  // already knows. Cheap, keeps the radar on screen, and handles the common
+  // case (AP dropped us for a few seconds).
+  if (s_soft_reconnect_tries < config::kWifiSoftReconnectTries) {
+    ++s_soft_reconnect_tries;
+    Serial.printf("WiFi soft reconnect %u/%u\n", s_soft_reconnect_tries,
+                  config::kWifiSoftReconnectTries);
+    prepareSta();
+    WiFi.reconnect();
+    const unsigned long deadline = millis() + config::kWifiSoftReconnectWaitMs;
+    while (millis() < deadline) {
+      if (wifiLinkUp()) {
+        return true;
+      }
+      bootButtonPollLongPress();
+      delay(20);
+    }
+    return wifiLinkUp();
+  }
+
+  // Tier 2 — full: re-begin with the saved credentials and show the connecting
+  // screen. Still never opens the portal, so a long outage cannot strand the
+  // device on the setup screen.
+  Serial.println("WiFi full reconnect...");
+  if (connectSavedNetwork(true)) {
+    return true;
+  }
+  // Back to cheap soft tries: alternating keeps a long outage from turning into
+  // a chain of 45-second blocking attempts.
+  s_soft_reconnect_tries = 0;
+  return false;
 }
 
 void wifiLoop() {
   ensureWifiManager();
   if (wifiLinkUp()) {
     if (!services::config_server::running()) {
-      services::config_server::begin();
+      services::config_server::begin();  // announces mDNS itself
+      s_link_up_pending = false;
+      markConfigured();
+    } else if (s_link_up_pending) {
+      s_link_up_pending = false;
+      markConfigured();
+      // A reconnect invalidates the old mDNS responder: re-announce so
+      // plane-radar.local keeps resolving without a reboot.
+      services::config_server::announce();
     }
     bootButtonPollLongPress();
     services::config_server::handle();
@@ -442,8 +603,8 @@ bool wifiSetupConnect() {
     Serial.println("Opening WiFi setup portal (after reset)");
     if (openConfigPortal() && wifiLinkUp()) {
       WiFi.setAutoReconnect(true);
-      Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                    WiFi.localIP().toString().c_str());
+      markConfigured();
+      announceConnected();
       return true;
     }
     Serial.println("WiFi connection failed");
@@ -451,32 +612,39 @@ bool wifiSetupConnect() {
     return false;
   }
 
-  Serial.println("Connecting to WiFi (portal opens if needed)...");
+  Serial.println("Connecting to WiFi...");
 
   if (wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
+    announceConnected();
     return true;
   }
 
-  if (storedWifiCredentials() && connectSavedNetwork(true)) {
+  const bool configured = storedWifiCredentials() || everConfigured();
+
+  if (configured && connectSavedNetwork(true)) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
+    announceConnected();
     return true;
   }
 
-  if (storedWifiCredentials()) {
-    Serial.println("Saved WiFi could not connect — opening setup portal");
-  } else {
-    Serial.println("No saved WiFi — opening setup portal");
+  if (configured) {
+    // Deliberately no portal here. A router that is slow to come up after a
+    // power cut, or a moment of weak signal, must not throw the user back into
+    // Wi-Fi setup — loop() keeps retrying the saved network, and the portal
+    // stays reachable on demand by holding BOOT for 10 s.
+    Serial.println("Saved WiFi not reachable — retrying in the background");
+    WiFi.setAutoReconnect(true);  // let the supplicant keep trying on its own
+    statusScreenConnectFailed();
+    return false;
   }
+
+  Serial.println("No saved WiFi — opening setup portal");
 
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
+    markConfigured();
+    announceConnected();
     return true;
   }
 

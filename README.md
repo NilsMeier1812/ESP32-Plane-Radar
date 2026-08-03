@@ -33,9 +33,27 @@ During setup you can also hold BOOT at power-on to force a credential reset.
 2. Open **`http://plane-radar.local`** (preferred) or **`http://192.168.4.1`** — both are shown on the yellow setup screen; captive portal may open automatically
 3. Set home Wi‑Fi, then save
 
-mDNS hostname is `plane-radar` → **plane-radar.local** (`kPortalHostname` in `config.h`). Some clients resolve `.local` slowly; use the IP if needed.
+mDNS hostname is `plane-radar` → **plane-radar.local** (`kPortalHostname` in `config.h`). The same name is also sent as the DHCP hostname, so many routers resolve `plane-radar` even when mDNS is filtered. Some clients resolve `.local` slowly; the device shows its **IP address** for a moment right after connecting — use that if the name does not resolve.
 
 To change **Wi‑Fi** later, hold **BOOT** to wipe credentials and reopen the setup AP. Everyday settings (center, scale, units, runways) live on the companion page below — no reset needed.
+
+### Staying connected
+
+Once a network is saved, the device **never falls back to the setup screen on its own**. A slow router after a power cut, or a weak moment on the link, only produces a “Could not connect — retrying” screen while it keeps trying:
+
+1. **soft reconnect** — re-associates without touching the radio state (the radar stays on screen); handles the usual short drop
+2. **full reconnect** — re-begins with the saved credentials and shows the connect animation
+
+The setup portal opens only when no credentials are stored, or after a deliberate reset (**hold BOOT for 10 s**).
+
+If the link still drops often, or the config page is hard to reach, the two knobs in `config.h` are:
+
+| Constant | Meaning |
+|----------|---------|
+| `kWifiTxPowerSta` | STA transmit power in quarter-dBm (`60` = 15 dBm default, `34` = 8.5 dBm). The C3 Super Mini's antenna is weak — lower values mean short range and frequent drops. Reduce it only if the board resets while connecting (weak USB supply). |
+| `kWifiTxPowerAp` | Same for the setup AP, which is used from close by (`34` = 8.5 dBm). |
+
+Wi‑Fi power save is kept off: with modem sleep on, the ESP misses packets between beacons, which is what makes the config page look offline.
 
 ## Companion config page
 

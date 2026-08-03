@@ -334,6 +334,19 @@ void handlePage() { s_server.send_P(200, "text/html; charset=utf-8", kPage); }
 
 }  // namespace
 
+void announce() {
+#ifdef WM_MDNS
+  MDNS.end();
+  if (MDNS.begin(config::kPortalHostname)) {
+    MDNS.setInstanceName("Plane Radar");
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS: http://%s.local\n", config::kPortalHostname);
+  } else {
+    Serial.println("mDNS: responder failed to start");
+  }
+#endif
+}
+
 void begin() {
   if (s_running) {
     return;
@@ -349,12 +362,7 @@ void begin() {
   s_server.begin();
   s_running = true;
 
-#ifdef WM_MDNS
-  MDNS.end();
-  if (MDNS.begin(config::kPortalHostname)) {
-    MDNS.addService("http", "tcp", 80);
-  }
-#endif
+  announce();
   Serial.printf("Config page: http://%s.local or http://%s\n",
                 config::kPortalHostname, WiFi.localIP().toString().c_str());
 }

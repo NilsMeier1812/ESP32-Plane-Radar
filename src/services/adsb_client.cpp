@@ -17,8 +17,15 @@ namespace {
 
 constexpr char kApiBase[] = "https://opendata.adsb.fi/api/v3/lat/";
 constexpr float kKmPerNm = 1.852f;
-constexpr int kConnectAttemptMs = 200;
-constexpr unsigned long kRequestTimeoutMs = 10000;
+/**
+ * A TLS connect needs seconds, not milliseconds. The old 200 ms budget made
+ * every connect fail, so the code retried the handshake back to back for the
+ * whole request window — which saturated the radio and left the config page
+ * unreachable. One honest attempt plus one retry is both faster and quieter.
+ */
+constexpr int kConnectAttemptMs = 4000;
+constexpr uint8_t kConnectAttempts = 2;
+constexpr unsigned long kRequestTimeoutMs = 6000;
 
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
@@ -39,10 +46,10 @@ void pollNetwork() {
 
 int performGetWithPoll(HTTPClient& http) {
   http.setConnectTimeout(kConnectAttemptMs);
-  const unsigned long deadline = millis() + kRequestTimeoutMs;
-  while (millis() < deadline) {
+  int code = HTTPC_ERROR_CONNECTION_REFUSED;
+  for (uint8_t attempt = 0; attempt < kConnectAttempts; ++attempt) {
     pollNetwork();
-    const int code = http.GET();
+    code = http.GET();
     if (code > 0) {
       return code;
     }
@@ -50,9 +57,10 @@ int performGetWithPoll(HTTPClient& http) {
         code != HTTPC_ERROR_NOT_CONNECTED) {
       return code;
     }
-    delay(5);
+    pollNetwork();
+    delay(20);
   }
-  return HTTPC_ERROR_READ_TIMEOUT;
+  return code;
 }
 
 bool readResponseBodyWithPoll(HTTPClient& http, String& payload) {
