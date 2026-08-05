@@ -75,13 +75,45 @@ While the device is on your Wi‑Fi it serves a small config page at **`http://p
 | **Scale** | Pick a range preset (5 / 10 / 15 / 25 km) |
 | **Track a flight** | Enter a callsign (e.g. `DLH400`) or registration; the radar centers on that aircraft and follows it. On signal loss it stays centered and shows a hint, reverting home after a longer outage. |
 | **Wi‑Fi networks** | Add / remove saved networks (up to 5), with a scan to pick the SSID. The device connects to whichever saved network is in range with the strongest signal. |
-| **Display** | Miles vs km, runway overlay on/off |
+| **Altitude filter** | Hide traffic below / above a given altitude in feet (0 = no bound) |
+| **Display** | Miles vs km, runway overlay, aircraft trails, auto zoom |
+| **Firmware** | Upload a `.bin` to update over Wi‑Fi; shows version, UTC time and TLS state |
+
+### Altitude filter
+
+Enter a minimum and/or maximum altitude in feet; anything outside is hidden. `0` means "no bound", so `10000 / 0` shows only high traffic and `0 / 5000` only what is low. Aircraft that report no altitude stay visible — hiding them would drop traffic rather than filter it.
+
+### Trails and auto zoom
+
+Both default to **off**.
+
+**Trails** draw the last six positions of each aircraft as breadcrumbs that fade toward the oldest, making the direction of travel obvious. History is keyed by ICAO address, so it survives the aircraft list being rebuilt on every fetch.
+
+**Auto zoom** picks the range preset from how busy the sky is: it widens after 12 s of an empty radar and tightens after 20 s of five or more aircraft — but only while the tighter ring would still show something, so it cannot oscillate. A manual BOOT tap still overrides it at any time.
+
+### Firmware update over Wi‑Fi (OTA)
+
+The **Firmware** card takes the `firmware.bin` from a build (Actions artifact or `.pio/build/supermini/`) and flashes it over the LAN; the device reboots into the new version. A failed or interrupted upload changes nothing — the running version stays active, because the image is written to the *other* app slot and only becomes the boot target once it is complete and valid.
+
+> **One-time USB flash needed.** The OTA layout splits the flash into two 1.9 MB app slots, which moves the app offset. A device running an older layout has to be flashed once over USB (use the merged image); every update after that can go over Wi‑Fi.
+
+The card also shows the firmware version, the device's UTC time, and whether the ADS-B connection is certificate-verified.
+
+### Time and TLS
+
+The device syncs its clock over NTP once connected. That is what makes certificate validation possible at all — before the clock is set, every certificate looks "not yet valid", so the first fetches run unverified and the connection upgrades itself the moment the time lands.
+
+If verification keeps failing (a root CA rotation newer than the firmware), the client says so on serial and in `/api/state` and continues unverified rather than leaving the radar blank. Set `kAdsbVerifyTls = false` in `config.h` to skip it entirely.
 
 ### Phone GPS helper (`docs/gps.html`)
 
 Browsers only expose GPS over **HTTPS**, which the device (plain HTTP on the LAN) cannot serve. `docs/gps.html` is a static page meant to be hosted over HTTPS — enable **GitHub Pages** for the `/docs` folder, then point `config::kGpsHelperUrl` at it (default: `https://<user>.github.io/<repo>/gps.html`). The device’s “Aktuelle Position vom Handy” button opens it with `?device=<ip>`; the page reads GPS and redirects back to `http://<ip>/api/center?lat=…&lon=…`.
 
 After a Wi‑Fi reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
+
+### "No data" badge
+
+When no fetch has succeeded for 15 s, a struck-through Wi‑Fi glyph with the age of the newest data appears at the bottom of the radar. An empty radar is otherwise ambiguous: quiet sky, or dead connection?
 
 ## Radar display
 
