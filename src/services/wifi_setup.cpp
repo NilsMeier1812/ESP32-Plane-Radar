@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 
+#include <cstdint>
 #include <cstdio>
 
 #include <Preferences.h>
@@ -16,6 +17,7 @@
 #include "config.h"
 #include "services/config_server.h"
 #include "services/radar_location.h"
+#include "services/wifi_networks.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
@@ -234,6 +236,7 @@ void resetWifiCredentials() {
   markForceConfigPortal();
   eraseWifiCredentials();
   clearConfigured();
+  services::wifi_networks::clear();
   services::location::clear();
   ui::radar::unitsReset();
   Serial.println("WiFi credentials, location, and units cleared");
@@ -416,14 +419,113 @@ void announceConnected() {
   }
 }
 
-bool connectSavedNetwork(bool show_ui) {
+/**
+ * Fold the credentials the provisioning portal stored into the network list,
+ * so everything downstream can work off a single list.
+ */
+void adoptPortalCredentials() {
   ensureWifiManager();
   const String ssid = s_wm.getWiFiSSID();
-  if (ssid.length() == 0) {
+  if (ssid.length() == 0 || services::wifi_networks::contains(ssid.c_str())) {
+    return;
+  }
+  services::wifi_networks::add(ssid.c_str(), s_wm.getWiFiPass().c_str());
+}
+
+/** One connect attempt against a single network; no internal retries. */
+bool tryCandidateOnce(const services::wifi_networks::Network& net, bool show_ui,
+                      unsigned long wait_ms) {
+  Serial.printf("WiFi trying %s\n", net.ssid);
+  if (show_ui) {
+    statusScreenConnectingBegin(net.ssid);
+  }
+  WiFi.disconnect(false);
+  delay(200);
+  startStaConnect(net.ssid, net.pass);
+  return waitForLinkWithUi(net.ssid, wait_ms);
+}
+
+/**
+ * Order the saved networks by how strongly they are being heard right now, so
+ * the device picks the network of the place it is actually in. Networks that
+ * the scan did not see are kept as a fallback (hidden SSIDs never show up, and
+ * a scan can simply miss an AP) but are tried last.
+ *
+ * Returns the number of entries written to `order`.
+ */
+size_t orderCandidatesByScan(uint8_t* order, size_t order_len) {
+  const size_t saved = services::wifi_networks::count();
+  int32_t rssi[services::wifi_networks::kMaxNetworks];
+  for (size_t i = 0; i < saved; ++i) {
+    rssi[i] = INT32_MIN;  // not seen
+  }
+
+  prepareSta();
+  statusScreenSearchingBegin();
+  const int found = WiFi.scanNetworks(false /*async*/, true /*show_hidden*/);
+  Serial.printf("WiFi scan: %d networks in range\n", found);
+  for (int i = 0; i < found; ++i) {
+    const String ssid = WiFi.SSID(i);
+    for (size_t n = 0; n < saved; ++n) {
+      if (ssid == services::wifi_networks::at(n).ssid &&
+          WiFi.RSSI(i) > rssi[n]) {
+        rssi[n] = WiFi.RSSI(i);
+      }
+    }
+  }
+  WiFi.scanDelete();
+
+  size_t n_order = 0;
+  for (size_t i = 0; i < saved && n_order < order_len; ++i) {
+    order[n_order++] = static_cast<uint8_t>(i);
+  }
+  // Insertion sort by RSSI, strongest first; tiny list, stable enough.
+  for (size_t i = 1; i < n_order; ++i) {
+    const uint8_t key = order[i];
+    size_t j = i;
+    while (j > 0 && rssi[order[j - 1]] < rssi[key]) {
+      order[j] = order[j - 1];
+      --j;
+    }
+    order[j] = key;
+  }
+
+  for (size_t i = 0; i < n_order; ++i) {
+    const int32_t r = rssi[order[i]];
+    if (r == INT32_MIN) {
+      Serial.printf("  %u. %s (not in range)\n", static_cast<unsigned>(i + 1),
+                    services::wifi_networks::at(order[i]).ssid);
+    } else {
+      Serial.printf("  %u. %s (%ld dBm)\n", static_cast<unsigned>(i + 1),
+                    services::wifi_networks::at(order[i]).ssid,
+                    static_cast<long>(r));
+    }
+  }
+  return n_order;
+}
+
+bool connectSavedNetwork(bool show_ui) {
+  adoptPortalCredentials();
+
+  const size_t saved = services::wifi_networks::count();
+  if (saved == 0) {
     return false;
   }
-  const String pass = s_wm.getWiFiPass();
-  return tryConnectWithUi(ssid, pass, show_ui);
+
+  if (saved == 1) {
+    const services::wifi_networks::Network& net = services::wifi_networks::at(0);
+    return tryConnectWithUi(net.ssid, net.pass, show_ui);
+  }
+
+  uint8_t order[services::wifi_networks::kMaxNetworks];
+  const size_t n_order = orderCandidatesByScan(order, sizeof(order));
+  for (size_t i = 0; i < n_order; ++i) {
+    if (tryCandidateOnce(services::wifi_networks::at(order[i]), show_ui,
+                         config::kWifiCandidateAttemptMs)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool openConfigPortal() {
@@ -604,6 +706,7 @@ bool wifiSetupConnect() {
     if (openConfigPortal() && wifiLinkUp()) {
       WiFi.setAutoReconnect(true);
       markConfigured();
+      adoptPortalCredentials();  // the freshly provisioned network joins the list
       announceConnected();
       return true;
     }
@@ -620,7 +723,8 @@ bool wifiSetupConnect() {
     return true;
   }
 
-  const bool configured = storedWifiCredentials() || everConfigured();
+  const bool configured = services::wifi_networks::count() > 0 ||
+                          storedWifiCredentials() || everConfigured();
 
   if (configured && connectSavedNetwork(true)) {
     WiFi.setAutoReconnect(true);
@@ -644,6 +748,7 @@ bool wifiSetupConnect() {
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
     markConfigured();
+    adoptPortalCredentials();  // the freshly provisioned network joins the list
     announceConnected();
     return true;
   }

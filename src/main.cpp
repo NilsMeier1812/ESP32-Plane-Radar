@@ -11,6 +11,7 @@
 #include "services/config_server.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
+#include "services/wifi_networks.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
@@ -146,6 +147,7 @@ void setup() {
   }
   services::location::init();
   services::tracking::init();
+  services::wifi_networks::init();
   ui::radar::rangeInit();
   services::adsb::setPollFn(wifiLoop);
 

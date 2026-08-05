@@ -33,6 +33,7 @@ struct SpinnerDot {
 
 char s_connecting_ssid[33];
 char s_ssid_line[33];
+const char* s_connecting_title = "Connecting to";
 constexpr int kConnectingTextMaxWidthPx = 220;
 float s_spinner_angle_deg = -90.0f;
 SpinnerDot s_spinner_dots[kSpinnerDotCount];
@@ -143,7 +144,7 @@ void drawConnectingText() {
                kConnectingTextMaxWidthPx, total_h + kPanelPadY * 2, config::kColorBlack);
 
   int y = block_top;
-  tft.drawString("Connecting to", kCenterX, y + detail_h / 2);
+  tft.drawString(s_connecting_title, kCenterX, y + detail_h / 2);
   y += detail_h + kLineGap;
   tft.drawString(s_ssid_line, kCenterX, y + detail_h / 2);
 
@@ -180,11 +181,9 @@ void drawSpinnerDots() {
   }
 }
 
-}  // namespace
-
-void statusScreenConnectingBegin(const char* ssid) {
-  const char* name = (ssid != nullptr && ssid[0] != '\0') ? ssid : "network";
-  strncpy(s_connecting_ssid, name, sizeof(s_connecting_ssid) - 1);
+void spinnerScreenBegin(const char* title, const char* subject) {
+  s_connecting_title = title;
+  strncpy(s_connecting_ssid, subject, sizeof(s_connecting_ssid) - 1);
   s_connecting_ssid[sizeof(s_connecting_ssid) - 1] = '\0';
   fitSsidLine();
   s_spinner_angle_deg = -90.0f;
@@ -194,6 +193,17 @@ void statusScreenConnectingBegin(const char* ssid) {
   s_connecting_text_drawn = false;
   drawConnectingText();
   drawSpinnerDots();
+}
+
+}  // namespace
+
+void statusScreenConnectingBegin(const char* ssid) {
+  const char* name = (ssid != nullptr && ssid[0] != '\0') ? ssid : "network";
+  spinnerScreenBegin("Connecting to", name);
+}
+
+void statusScreenSearchingBegin() {
+  spinnerScreenBegin("Searching for", "known networks");
 }
 
 void statusScreenConnectingTick() {

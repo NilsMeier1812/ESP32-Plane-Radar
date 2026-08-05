@@ -25,6 +25,12 @@ constexpr char kGpsHelperUrl[] =
 /** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;
 constexpr uint8_t kWifiConnectAttempts = 3;
+/**
+ * Per-network wait when several networks are saved: each is tried once per
+ * pass, ordered by signal strength, so a place whose network is out of range
+ * is skipped quickly instead of eating the whole connect budget.
+ */
+constexpr unsigned long kWifiCandidateAttemptMs = 9000;
 constexpr unsigned long kWifiPortalTimeoutSec = 0;  // 0 = no timeout while configuring
 constexpr unsigned long kWifiConnectingFrameMs = 50;
 /** Wait after disconnect before reconnecting (avoids churn on brief drops). */

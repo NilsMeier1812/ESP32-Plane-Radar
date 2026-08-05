@@ -4,6 +4,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <cstring>
+
 #ifdef WM_MDNS
 #include <ESPmDNS.h>
 #endif
@@ -11,6 +13,7 @@
 #include "config.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
+#include "services/wifi_networks.h"
 #include "ui/radar_range.h"
 
 namespace services::config_server {
@@ -65,6 +68,15 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
            pointer-events: none; font-size: .9rem; }
   .toast.show { opacity: 1; }
   .hint { color: #7d8f84; font-size: .75rem; margin-top: 6px; }
+  .netlist { margin-bottom: 4px; }
+  .net { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+         background: #0b0f0c; border: 1px solid #263429; border-radius: 10px;
+         margin-bottom: 6px; }
+  .net span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .net .tag { flex: 0 0 auto; color: #3ad07a; font-size: .75rem; }
+  .net button { flex: 0 0 auto; padding: 6px 10px; font-size: .8rem;
+                background: #2a1a1a; color: #e8b0b0; }
+  .empty { color: #7d8f84; font-size: .8rem; margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -110,6 +122,25 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card">
+    <h2>WLAN-Netzwerke</h2>
+    <div id="netlist" class="netlist"></div>
+    <label>Netzwerkname (SSID)</label>
+    <div class="row">
+      <input id="netssid" list="scanlist" placeholder="z.B. Fritz!Box 7590"
+             autocomplete="off">
+      <button style="flex:0 0 auto" class="ghost" onclick="scanNets()">Suchen</button>
+    </div>
+    <datalist id="scanlist"></datalist>
+    <label>Passwort</label>
+    <input id="netpass" type="password" placeholder="leer lassen bei offenem Netz"
+           autocomplete="new-password">
+    <button class="mt" style="width:100%" onclick="addNet()">Netzwerk speichern</button>
+    <div class="hint">Bis zu 5 Netzwerke. Beim Verbinden nimmt das Gerät das
+      verfügbare Netz mit dem stärksten Signal — so läuft es an mehreren Orten
+      ohne Neueinrichtung.</div>
+  </div>
+
+  <div class="card">
     <h2>Anzeige</h2>
     <div class="toggle"><span>Entfernungen in Meilen</span>
       <input id="miles" type="checkbox" style="width:auto" onchange="setOptions()"></div>
@@ -137,6 +168,20 @@ function render(){
   document.getElementById('track').value = S.track_target || '';
   const tsmap={off:'Kein Flug verfolgt',searching:'Suche…',tracking:'Wird verfolgt',lost:'Signal verloren'};
   document.getElementById('trackstatus').textContent = tsmap[S.track_state]||'';
+  const nets = document.getElementById('netlist'); nets.innerHTML='';
+  if(!(S.networks||[]).length){
+    nets.innerHTML = '<div class="empty">Noch kein Netzwerk gespeichert.</div>';
+  }
+  (S.networks||[]).forEach(n=>{
+    const row=document.createElement('div'); row.className='net';
+    const name=document.createElement('span'); name.textContent=n.ssid;
+    row.appendChild(name);
+    if(n.current){const t=document.createElement('span');t.className='tag';
+      t.textContent='verbunden';row.appendChild(t);}
+    const del=document.createElement('button'); del.textContent='Entfernen';
+    del.onclick=()=>removeNet(n.ssid); row.appendChild(del);
+    nets.appendChild(row);
+  });
   const box = document.getElementById('scales'); box.innerHTML='';
   (S.presets||[]).forEach((km,i)=>{
     const b=document.createElement('button');
@@ -174,6 +219,32 @@ function useGps(){
               encodeURIComponent(S.ip);
   window.location.href = url;
 }
+async function addNet(){
+  const ssid=document.getElementById('netssid').value.trim();
+  if(!ssid) return;
+  const pass=document.getElementById('netpass').value;
+  const r=await api('/api/wifi',{ssid,pass});
+  if(r.ok){S=r.state;render();
+    document.getElementById('netssid').value='';
+    document.getElementById('netpass').value='';
+    toast('Netzwerk gespeichert');}
+  else toast(r.msg||'Fehler');
+}
+async function removeNet(ssid){
+  if(!confirm('Netzwerk "'+ssid+'" entfernen?')) return;
+  const r=await api('/api/wifi',{remove:ssid});
+  if(r.ok){S=r.state;render();toast('Netzwerk entfernt');} else toast(r.msg||'Fehler');
+}
+async function scanNets(){
+  toast('Suche Netzwerke…');
+  const r=await api('/api/wifi/scan');
+  const list=document.getElementById('scanlist'); list.innerHTML='';
+  (r.networks||[]).forEach(n=>{
+    const o=document.createElement('option'); o.value=n.ssid;
+    o.label=n.rssi+' dBm'; list.appendChild(o);
+  });
+  toast((r.networks||[]).length+' Netzwerke gefunden');
+}
 async function trackStart(){
   const v=document.getElementById('track').value.trim();
   if(!v) return;
@@ -198,6 +269,14 @@ void fillState(JsonObject o) {
   o["use_miles"] = ui::radar::useMiles();
   o["show_runways"] = ui::radar::showRunways();
   o["ip"] = WiFi.localIP().toString();
+  o["ssid"] = WiFi.SSID();
+  JsonArray nets = o["networks"].to<JsonArray>();
+  for (size_t i = 0; i < services::wifi_networks::count(); ++i) {
+    const char* ssid = services::wifi_networks::at(i).ssid;
+    JsonObject n = nets.add<JsonObject>();
+    n["ssid"] = ssid;  // passwords are never sent back out
+    n["current"] = WiFi.SSID() == ssid;
+  }
   o["gps_helper"] = config::kGpsHelperUrl;
   o["track_active"] = services::tracking::active();
   o["track_target"] = services::tracking::target();
@@ -308,6 +387,78 @@ void handleOptionsPost() {
   sendState(200, true, nullptr);
 }
 
+// Add / update / remove a saved network. Adding does not disturb the current
+// link: the new entry is simply part of the candidate list next time the
+// device connects (or is moved to another place).
+void handleWifiPost() {
+  JsonDocument doc;
+  if (deserializeJson(doc, s_server.arg("plain"))) {
+    sendState(400, false, "Ungültige Anfrage");
+    return;
+  }
+
+  const char* remove_ssid = doc["remove"] | "";
+  if (remove_ssid[0] != '\0') {
+    if (!services::wifi_networks::remove(remove_ssid)) {
+      sendState(404, false, "Netzwerk nicht gespeichert");
+      return;
+    }
+    sendState(200, true, nullptr);
+    return;
+  }
+
+  const char* ssid = doc["ssid"] | "";
+  if (ssid[0] == '\0') {
+    sendState(400, false, "SSID erforderlich");
+    return;
+  }
+  if (strlen(ssid) >= services::wifi_networks::kSsidLen) {
+    sendState(400, false, "SSID zu lang");
+    return;
+  }
+  const char* pass = doc["pass"] | "";
+  if (strlen(pass) >= services::wifi_networks::kPassLen) {
+    sendState(400, false, "Passwort zu lang");
+    return;
+  }
+  if (!services::wifi_networks::add(ssid, pass)) {
+    sendState(409, false, "Liste voll — erst ein Netzwerk entfernen");
+    return;
+  }
+  sendState(200, true, nullptr);
+}
+
+// On-demand scan so the SSID can be picked instead of typed. Blocks for a
+// couple of seconds and briefly interrupts traffic, hence not automatic.
+void handleWifiScanGet() {
+  const int found = WiFi.scanNetworks(false /*async*/, false /*show_hidden*/);
+  JsonDocument doc;
+  JsonArray nets = doc["networks"].to<JsonArray>();
+  for (int i = 0; i < found; ++i) {
+    const String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) {
+      continue;
+    }
+    bool duplicate = false;
+    for (JsonObject seen : nets) {
+      if (ssid == seen["ssid"].as<const char*>()) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    JsonObject n = nets.add<JsonObject>();
+    n["ssid"] = ssid;
+    n["rssi"] = WiFi.RSSI(i);
+  }
+  WiFi.scanDelete();
+  String out;
+  serializeJson(doc, out);
+  s_server.send(200, "application/json", out);
+}
+
 void handleTrackPost() {
   JsonDocument doc;
   if (deserializeJson(doc, s_server.arg("plain"))) {
@@ -358,6 +509,8 @@ void begin() {
   s_server.on("/api/scale", HTTP_POST, handleScalePost);
   s_server.on("/api/options", HTTP_POST, handleOptionsPost);
   s_server.on("/api/track", HTTP_POST, handleTrackPost);
+  s_server.on("/api/wifi", HTTP_POST, handleWifiPost);
+  s_server.on("/api/wifi/scan", HTTP_GET, handleWifiScanGet);
   s_server.onNotFound(handlePage);
   s_server.begin();
   s_running = true;

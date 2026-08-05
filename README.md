@@ -37,6 +37,14 @@ mDNS hostname is `plane-radar` → **plane-radar.local** (`kPortalHostname` in `
 
 To change **Wi‑Fi** later, hold **BOOT** to wipe credentials and reopen the setup AP. Everyday settings (center, scale, units, runways) live on the companion page below — no reset needed.
 
+### Several networks
+
+The device stores up to **5 networks** (`kMaxNetworks`), managed on the companion page under **WLAN‑Netzwerke** — no setup portal needed to add one. Enter the SSID (or hit **Suchen** to pick it from a scan) and the password; the network from the initial setup is added automatically.
+
+When connecting, the device scans and tries the saved networks **strongest signal first**, so it just works when carried between places. Networks that are not in range are skipped and only tried at the end (a scan can miss hidden SSIDs). If none answer, it keeps retrying — the setup portal still never opens on its own.
+
+Passwords are stored on the device so it can reconnect unattended, and are never sent back out by the config API.
+
 ### Staying connected
 
 Once a network is saved, the device **never falls back to the setup screen on its own**. A slow router after a power cut, or a weak moment on the link, only produces a “Could not connect — retrying” screen while it keeps trying:
@@ -66,6 +74,7 @@ While the device is on your Wi‑Fi it serves a small config page at **`http://p
 | **Center — phone GPS** | Opens the HTTPS helper page (below), which reads the phone’s location and sends it back |
 | **Scale** | Pick a range preset (5 / 10 / 15 / 25 km) |
 | **Track a flight** | Enter a callsign (e.g. `DLH400`) or registration; the radar centers on that aircraft and follows it. On signal loss it stays centered and shows a hint, reverting home after a longer outage. |
+| **Wi‑Fi networks** | Add / remove saved networks (up to 5), with a scan to pick the SSID. The device connects to whichever saved network is in range with the strongest signal. |
 | **Display** | Miles vs km, runway overlay on/off |
 
 ### Phone GPS helper (`docs/gps.html`)
