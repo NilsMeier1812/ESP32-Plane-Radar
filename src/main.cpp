@@ -8,9 +8,11 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
+#include "services/clock_time.h"
 #include "services/config_server.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
+#include "services/trails.h"
 #include "services/wifi_networks.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
@@ -129,6 +131,17 @@ void fetchAircraft() {
     services::adsb::fetchUpdate(tr::centerLat(), tr::centerLon(), fetch_km);
   }
 
+  if (ui::radar::showTrails()) {
+    services::trails::onFetch(services::adsb::aircraftList(),
+                              services::adsb::aircraftCount());
+  }
+
+  // Auto zoom reads the freshly fetched picture; a range change needs the grid
+  // (rings, scale label) redrawn, not just the aircraft layer.
+  if (ui::radarAutoZoomTick()) {
+    g_radar_visible = false;
+  }
+
   handleBootButton();
 }
 
@@ -187,6 +200,8 @@ void loop() {
     }
   } else {
     g_wifi_down_since = 0;
+    services::clock_time::begin();
+    services::clock_time::loop();
     if (!g_radar_visible) {
       showRadarIfConnected();
     } else if (!hinting) {

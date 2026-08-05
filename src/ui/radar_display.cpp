@@ -13,6 +13,7 @@
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
+#include "services/trails.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
@@ -484,6 +485,34 @@ void sortBeyondDotsFarFirst(BeyondDotDrawItem* items, size_t count) {
   }
 }
 
+/** Fading breadcrumbs behind the aircraft, oldest dimmest. */
+void drawTrail(const services::adsb::Aircraft& plane) {
+  float lat[services::trails::kMaxPoints];
+  float lon[services::trails::kMaxPoints];
+  const size_t n = services::trails::pointsFor(plane.hex, lat, lon,
+                                               services::trails::kMaxPoints);
+  if (n < 2) {
+    return;
+  }
+
+  for (size_t i = 0; i + 1 < n; ++i) {  // skip the newest: the symbol sits there
+    int x = 0;
+    int y = 0;
+    latLonToScreen(lat[i], lon[i], &x, &y);
+    if (!isInsideOuterRing(x, y)) {
+      continue;
+    }
+    // Oldest point faintest; newest nearly full brightness.
+    const float f = static_cast<float>(i + 1) / static_cast<float>(n);
+    const uint8_t level = static_cast<uint8_t>(40.0f + 160.0f * f);
+    const uint16_t color = config::kDisplayRgbOrder
+                               ? s_draw->color565(0, 0, level)
+                               : s_draw->color565(level, 0, 0);
+    const int r = (i + 2 >= n) ? 2 : 1;
+    s_draw->fillSmoothCircle(x, y, r, color);
+  }
+}
+
 void drawAircraft() {
   initLabelMetrics();
 
@@ -508,6 +537,10 @@ void drawAircraft() {
   size_t dot_count = 0;
 
   for (size_t i = 0; i < n; ++i) {
+    if (!radar::altitudePasses(planes[i].alt_ft, planes[i].alt_known)) {
+      continue;
+    }
+
     float lat = 0.0f;
     float lon = 0.0f;
     services::adsb::extrapolate(planes[i], elapsed_s, &lat, &lon);
@@ -546,6 +579,11 @@ void drawAircraft() {
   }
 
   sortDrawItemsFarFirst(items, draw_count);
+  if (radar::showTrails()) {
+    for (size_t d = 0; d < draw_count; ++d) {
+      drawTrail(planes[items[d].index]);
+    }
+  }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
     const int x = items[d].x;
@@ -713,6 +751,63 @@ void drawTrackingOverlay() {
   s_draw->drawString(banner, radar::kCenterX, kBannerTopY);
 }
 
+/**
+ * Struck-through Wi-Fi glyph plus the age of the newest data, shown once
+ * fetches have been failing for kNoDataWarnAfterMs. Without it an empty radar
+ * is ambiguous: quiet sky or dead connection?
+ */
+void drawNoDataOverlay() {
+  const unsigned long base = services::adsb::lastUpdateMillis();
+  const unsigned long now = millis();
+  // base == 0: nothing fetched since boot — count from boot instead.
+  const unsigned long age_ms = (base == 0) ? now : (now - base);
+  if (age_ms < config::kNoDataWarnAfterMs) {
+    return;
+  }
+
+  char age[8];
+  const unsigned long age_s = age_ms / 1000UL;
+  if (age_s < 100) {
+    snprintf(age, sizeof(age), "%lus", age_s);
+  } else if (age_s < 6000) {
+    snprintf(age, sizeof(age), "%lum", age_s / 60UL);
+  } else {
+    snprintf(age, sizeof(age), "99m+");
+  }
+
+  initTagLabelMetrics();
+  applyTagStyle();
+  const int th = s_draw->fontHeight();
+  const int tw = s_draw->textWidth(age);
+
+  constexpr int kIconW = 15;   // widest arc
+  constexpr int kIconH = 11;
+  constexpr int kIconGap = 4;
+  const int block_w = kIconW + kIconGap + tw;
+  const int block_h = (th > kIconH) ? th : kIconH;
+  const int left = radar::kCenterX - block_w / 2;
+  const int top = radar::kSize - radar::kNoDataBottomMarginPx - block_h;
+
+  s_draw->fillRect(left - 3, top - 2, block_w + 6, block_h + 4,
+                   radar::kColorBackground);
+
+  // Three arcs + dot, drawn as stacked partial circles around the base point.
+  const int bx = left + kIconW / 2;
+  const int by = top + kIconH;
+  const uint16_t col = radar::kColorTagAltitude;
+  for (int r = 4; r <= 10; r += 3) {
+    s_draw->drawArc(bx, by, r, r + 1, 225, 315, col);
+  }
+  s_draw->fillSmoothCircle(bx, by - 1, 1, col);
+  // Slash: unmistakably "no link", not just a weak one.
+  s_draw->drawWideLine(left, by + 1, left + kIconW, by - kIconH, 1.0f,
+                       radar::kColorAircraft);
+
+  s_draw->setTextDatum(textdatum_t::top_left);
+  s_draw->setTextColor(col, radar::kColorBackground);
+  s_draw->drawString(age, left + kIconW + kIconGap, top + (block_h - th) / 2);
+}
+
 bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
@@ -735,12 +830,91 @@ void renderFrame() {
     const DrawScope scope(s_frame);
     drawAircraft();
     drawTrackingOverlay();
+    drawNoDataOverlay();
   }
   s_frame.pushSprite(0, 0);
   tft.setTextDatum(textdatum_t::top_left);
 }
 
+/** Aircraft passing the altitude filter inside a hypothetical outer radius. */
+size_t countInsideKm(float radius_km) {
+  const size_t n = services::adsb::aircraftCount();
+  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+  const float usable_km =
+      radius_km * (static_cast<float>(radar::kGridOuterRadius -
+                                      radar::kAircraftInsideRingInsetPx) /
+                   static_cast<float>(radar::kGridOuterRadius));
+  size_t count = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (!radar::altitudePasses(planes[i].alt_ft, planes[i].alt_known)) {
+      continue;
+    }
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    offsetKmFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
+    if (dist_km <= usable_km) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 }  // namespace
+
+bool radarAutoZoomTick() {
+  static unsigned long s_empty_since = 0;
+  static unsigned long s_busy_since = 0;
+
+  if (!radar::autoZoom()) {
+    s_empty_since = 0;
+    s_busy_since = 0;
+    return false;
+  }
+
+  const unsigned long now = millis();
+  const size_t visible = countInsideKm(radar::rangeCurrent().outer_km);
+  const uint8_t index = radar::rangeIndex();
+
+  if (visible == 0) {
+    s_busy_since = 0;
+    if (s_empty_since == 0) {
+      s_empty_since = now;
+    } else if (now - s_empty_since >= config::kAutoZoomOutAfterMs &&
+               index + 1 < radar::kRangePresetCount) {
+      radar::rangeSetIndex(static_cast<uint8_t>(index + 1));
+      s_empty_since = 0;
+      Serial.println("auto zoom: out (radar empty)");
+      return true;
+    }
+    return false;
+  }
+
+  s_empty_since = 0;
+
+  if (visible < config::kAutoZoomInThreshold || index == 0) {
+    s_busy_since = 0;
+    return false;
+  }
+  if (s_busy_since == 0) {
+    s_busy_since = now;
+    return false;
+  }
+  if (now - s_busy_since < config::kAutoZoomInAfterMs) {
+    return false;
+  }
+  // Only tighten while the smaller ring would still show something; otherwise
+  // the radar would zoom in on an empty patch and immediately zoom back out.
+  if (countInsideKm(radar::kRangePresets[index - 1].outer_km) <
+      config::kAutoZoomKeepVisible) {
+    s_busy_since = now;  // re-arm rather than oscillate
+    return false;
+  }
+  radar::rangeSetIndex(static_cast<uint8_t>(index - 1));
+  s_busy_since = 0;
+  Serial.printf("auto zoom: in (%u aircraft)\n", static_cast<unsigned>(visible));
+  return true;
+}
 
 void radarDisplayDraw() {
   initPalette();

@@ -47,6 +47,25 @@ float fetchRadiusKm();
 
 bool useMiles();
 bool showRunways();
+
+/**
+ * Altitude filter in feet; 0 means "no bound". Aircraft whose reported
+ * altitude falls outside [min, max] are hidden from the radar. Aircraft that
+ * report no altitude at all are always shown — hiding them would silently drop
+ * traffic rather than filter it.
+ */
+int altMinFt();
+int altMaxFt();
+void setAltFilter(int min_ft, int max_ft);
+bool altitudePasses(float alt_ft, bool alt_known);
+
+/** Fading breadcrumb trail behind each aircraft (default off). */
+bool showTrails();
+void setShowTrails(bool on);
+
+/** Pick the range preset automatically from how busy the sky is (default off). */
+bool autoZoom();
+void setAutoZoom(bool on);
 /** WiFi portal checkbox: "T" = miles, otherwise km. */
 void saveMilesFromPortal(const char* checkbox_value);
 void saveRunwaysFromPortal(const char* checkbox_value);

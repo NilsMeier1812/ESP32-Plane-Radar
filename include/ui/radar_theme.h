@@ -59,6 +59,8 @@ constexpr int kAircraftInsideRingInsetPx =
 /** Beyond-ring traffic: bearing cues on screen rim (correct direction, fixed radius). */
 constexpr int kBeyondRingDotRadiusPx = 4;
 constexpr int kBeyondRingScreenMarginPx = 2;
+/** "No data" badge: distance from the bottom screen edge (px). */
+constexpr int kNoDataBottomMarginPx = 18;
 /** Target cap height (px) for aircraft tags (bold, slightly above scale label). */
 constexpr int kAircraftTagLabelHeightPx = 13;
 

@@ -1,6 +1,7 @@
 #include "services/config_server.h"
 
 #include <ArduinoJson.h>
+#include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
@@ -11,6 +12,8 @@
 #endif
 
 #include "config.h"
+#include "services/adsb_client.h"
+#include "services/clock_time.h"
 #include "services/radar_location.h"
 #include "services/tracking.h"
 #include "services/wifi_networks.h"
@@ -141,11 +144,40 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card">
+    <h2>Höhenfilter</h2>
+    <div class="row">
+      <div><label>Mindesthöhe (ft)</label>
+        <input id="altmin" type="number" min="0" step="500" placeholder="0 = aus"></div>
+      <div><label>Maximalhöhe (ft)</label>
+        <input id="altmax" type="number" min="0" step="500" placeholder="0 = aus"></div>
+    </div>
+    <button class="mt" style="width:100%" onclick="setAltFilter()">Filter übernehmen</button>
+    <div class="hint">Blendet Flugzeuge außerhalb des Bereichs aus. 0 bedeutet
+      keine Grenze. Maschinen ohne Höhenangabe bleiben immer sichtbar.</div>
+  </div>
+
+  <div class="card">
     <h2>Anzeige</h2>
     <div class="toggle"><span>Entfernungen in Meilen</span>
       <input id="miles" type="checkbox" style="width:auto" onchange="setOptions()"></div>
     <div class="toggle"><span>Landebahnen anzeigen</span>
       <input id="runways" type="checkbox" style="width:auto" onchange="setOptions()"></div>
+    <div class="toggle"><span>Spuren hinter Flugzeugen</span>
+      <input id="trails" type="checkbox" style="width:auto" onchange="setOptions()"></div>
+    <div class="toggle"><span>Automatischer Zoom</span>
+      <input id="autozoom" type="checkbox" style="width:auto" onchange="setOptions()"></div>
+    <div class="hint">Auto-Zoom weitet den Bereich, wenn nichts fliegt, und
+      zieht ihn zusammen, wenn es voll wird.</div>
+  </div>
+
+  <div class="card">
+    <h2>Firmware</h2>
+    <div class="hint" id="fwinfo" style="margin-top:0"></div>
+    <label>Firmware-Datei (.bin)</label>
+    <input id="fwfile" type="file" accept=".bin">
+    <button class="mt" style="width:100%" onclick="upload()">Update installieren</button>
+    <div class="hint" id="fwstatus">Das Gerät startet nach dem Update neu. Bei
+      einem Fehler läuft die bisherige Version einfach weiter.</div>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -165,6 +197,13 @@ function render(){
   document.getElementById('lon').value = fmt(S.lon);
   document.getElementById('miles').checked = !!S.use_miles;
   document.getElementById('runways').checked = !!S.show_runways;
+  document.getElementById('trails').checked = !!S.trails;
+  document.getElementById('autozoom').checked = !!S.auto_zoom;
+  document.getElementById('altmin').value = S.alt_min_ft || 0;
+  document.getElementById('altmax').value = S.alt_max_ft || 0;
+  document.getElementById('fwinfo').textContent =
+    'Version ' + (S.version||'?') + ' · Zeit ' + (S.time_utc||'?') +
+    ' · TLS ' + (S.tls_verified ? 'geprüft' : 'ungeprüft');
   document.getElementById('track').value = S.track_target || '';
   const tsmap={off:'Kein Flug verfolgt',searching:'Suche…',tracking:'Wird verfolgt',lost:'Signal verloren'};
   document.getElementById('trackstatus').textContent = tsmap[S.track_state]||'';
@@ -211,8 +250,36 @@ async function setScale(i){
 async function setOptions(){
   const r=await api('/api/options',{
     miles:document.getElementById('miles').checked,
-    runways:document.getElementById('runways').checked});
+    runways:document.getElementById('runways').checked,
+    trails:document.getElementById('trails').checked,
+    auto_zoom:document.getElementById('autozoom').checked});
   if(r.ok){S=r.state;render();}
+}
+async function setAltFilter(){
+  const r=await api('/api/options',{
+    alt_min_ft:parseInt(document.getElementById('altmin').value||'0',10),
+    alt_max_ft:parseInt(document.getElementById('altmax').value||'0',10)});
+  if(r.ok){S=r.state;render();toast('Höhenfilter gesetzt');}
+}
+function upload(){
+  const f=document.getElementById('fwfile').files[0];
+  if(!f){toast('Bitte eine .bin-Datei wählen');return;}
+  const st=document.getElementById('fwstatus');
+  const fd=new FormData(); fd.append('firmware',f,f.name);
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/update');
+  xhr.upload.onprogress=e=>{
+    if(e.lengthComputable)
+      st.textContent='Übertrage… '+Math.round(e.loaded/e.total*100)+'%';
+  };
+  xhr.onload=()=>{
+    let m='Update fehlgeschlagen';
+    try{m=JSON.parse(xhr.responseText).msg||m;}catch(e){}
+    st.textContent=m; toast(m);
+  };
+  xhr.onerror=()=>{st.textContent='Verbindung beim Update verloren';};
+  st.textContent='Übertrage… 0%';
+  xhr.send(fd);
 }
 function useGps(){
   const url = S.gps_helper + (S.gps_helper.includes('?')?'&':'?') + 'device=' +
@@ -268,6 +335,13 @@ void fillState(JsonObject o) {
   o["outer_km"] = ui::radar::rangeCurrent().outer_km;
   o["use_miles"] = ui::radar::useMiles();
   o["show_runways"] = ui::radar::showRunways();
+  o["alt_min_ft"] = ui::radar::altMinFt();
+  o["alt_max_ft"] = ui::radar::altMaxFt();
+  o["trails"] = ui::radar::showTrails();
+  o["auto_zoom"] = ui::radar::autoZoom();
+  o["version"] = config::kFirmwareVersion;
+  o["time_utc"] = services::clock_time::isoUtc();
+  o["tls_verified"] = services::adsb::tlsVerified();
   o["ip"] = WiFi.localIP().toString();
   o["ssid"] = WiFi.SSID();
   JsonArray nets = o["networks"].to<JsonArray>();
@@ -383,6 +457,16 @@ void handleOptionsPost() {
   if (doc["runways"].is<bool>()) {
     ui::radar::saveRunwaysFromPortal(doc["runways"].as<bool>() ? "T" : "");
   }
+  if (doc["trails"].is<bool>()) {
+    ui::radar::setShowTrails(doc["trails"].as<bool>());
+  }
+  if (doc["auto_zoom"].is<bool>()) {
+    ui::radar::setAutoZoom(doc["auto_zoom"].as<bool>());
+  }
+  if (doc["alt_min_ft"].is<int>() || doc["alt_max_ft"].is<int>()) {
+    ui::radar::setAltFilter(doc["alt_min_ft"] | ui::radar::altMinFt(),
+                            doc["alt_max_ft"] | ui::radar::altMaxFt());
+  }
   s_changed = true;
   sendState(200, true, nullptr);
 }
@@ -481,6 +565,81 @@ void handleTrackPost() {
   sendState(200, true, nullptr);
 }
 
+// --- OTA ---
+// The upload arrives in chunks through WebServer's upload callback; each one is
+// streamed straight into the inactive OTA slot, so no buffering of a 1.3 MB
+// image in RAM (which would never fit).
+bool s_ota_ok = false;
+String s_ota_error;
+
+void handleUpdatePost() {
+  const bool ok = s_ota_ok && !Update.hasError();
+  JsonDocument doc;
+  doc["ok"] = ok;
+  doc["msg"] = ok ? "Update installiert — Gerät startet neu"
+                  : (s_ota_error.length() > 0 ? s_ota_error
+                                              : String("Update fehlgeschlagen"));
+  String out;
+  serializeJson(doc, out);
+  s_server.sendHeader("Connection", "close");
+  s_server.send(ok ? 200 : 500, "application/json", out);
+
+  if (ok) {
+    Serial.println("OTA: update installed, restarting");
+    delay(400);
+    ESP.restart();
+  }
+}
+
+void handleUpdateUpload() {
+  HTTPUpload& upload = s_server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    s_ota_ok = false;
+    s_ota_error = "";
+    Serial.printf("OTA: receiving %s\n", upload.filename.c_str());
+    // UPDATE_SIZE_UNKNOWN: the browser does not tell us the length up front,
+    // so the whole free OTA partition is erased.
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      s_ota_error = "Kein Platz für das Update";
+      Update.printError(Serial);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_WRITE) {
+    if (s_ota_error.length() > 0) {
+      return;
+    }
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      s_ota_error = "Schreibfehler beim Update";
+      Update.printError(Serial);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_END) {
+    if (s_ota_error.length() > 0) {
+      Update.abort();
+      return;
+    }
+    if (Update.end(true)) {
+      s_ota_ok = true;
+      Serial.printf("OTA: %u bytes written\n",
+                    static_cast<unsigned>(upload.totalSize));
+    } else {
+      s_ota_error = "Ungültiges Firmware-Image";
+      Update.printError(Serial);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    s_ota_error = "Upload abgebrochen";
+  }
+}
+
 void handlePage() { s_server.send_P(200, "text/html; charset=utf-8", kPage); }
 
 }  // namespace
@@ -511,6 +670,7 @@ void begin() {
   s_server.on("/api/track", HTTP_POST, handleTrackPost);
   s_server.on("/api/wifi", HTTP_POST, handleWifiPost);
   s_server.on("/api/wifi/scan", HTTP_GET, handleWifiScanGet);
+  s_server.on("/api/update", HTTP_POST, handleUpdatePost, handleUpdateUpload);
   s_server.onNotFound(handlePage);
   s_server.begin();
   s_running = true;

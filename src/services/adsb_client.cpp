@@ -10,6 +10,14 @@
 #include <cstring>
 
 #include "config.h"
+#include "services/clock_time.h"
+
+/**
+ * Root CA bundle embedded in the ESP-IDF image (esp_crt_bundle component).
+ * Referencing the symbol directly avoids shipping a copy of the Mozilla root
+ * list in this repo and keeps it in step with the framework.
+ */
+extern const uint8_t kRootCaBundle[] asm("_binary_x509_crt_bundle_start");
 
 namespace services::adsb {
 
@@ -37,6 +45,9 @@ PollFn s_poll_fn = nullptr;
 WiFiClientSecure s_client;
 HTTPClient s_http;
 bool s_http_ready = false;
+bool s_tls_verified = false;
+uint8_t s_tls_failures = 0;
+bool s_tls_gave_up = false;
 
 void pollNetwork() {
   if (s_poll_fn != nullptr) {
@@ -182,6 +193,12 @@ void copyJsonStringTrimmed(const JsonObject& obj, const char* key, char* out,
   out[n] = '\0';
 }
 
+/** Numeric altitude in feet; false when the aircraft reports none (or "ground"). */
+bool readAltitudeFt(const JsonObject& plane, float* out_ft) {
+  return readJsonFloat(plane, "alt_baro", out_ft) ||
+         readJsonFloat(plane, "alt_geom", out_ft);
+}
+
 void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
   out[0] = '\0';
   if (out_len == 0) {
@@ -198,13 +215,13 @@ void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
   }
 
   float alt = 0.0f;
-  if (readJsonFloat(plane, "alt_baro", &alt) ||
-      readJsonFloat(plane, "alt_geom", &alt)) {
+  if (readAltitudeFt(plane, &alt)) {
     snprintf(out, out_len, "%d ft", static_cast<int>(lroundf(alt)));
   }
 }
 
 void fillTagFields(Aircraft* ac, const JsonObject& plane) {
+  copyJsonStringTrimmed(plane, "hex", ac->hex, sizeof(ac->hex));
   copyJsonStringTrimmed(plane, "flight", ac->callsign, sizeof(ac->callsign));
   if (ac->callsign[0] == '\0') {
     copyJsonStringTrimmed(plane, "hex", ac->callsign, sizeof(ac->callsign));
@@ -212,6 +229,8 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
 
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
   formatAltitudeTag(plane, ac->alt, sizeof(ac->alt));
+  ac->alt_ft = 0.0f;
+  ac->alt_known = readAltitudeFt(plane, &ac->alt_ft);
 }
 
 // True if plane[field] equals key ignoring case and trailing spaces.
@@ -236,12 +255,47 @@ bool planeMatches(const JsonObject& plane, const char* key) {
   return fieldMatches(plane, "flight", key) || fieldMatches(plane, "r", key);
 }
 
-bool httpGetJson(const String& url, JsonDocument& doc) {
-  if (!s_http_ready) {
-    s_client.setInsecure();
-    s_http.setReuse(true);  // keep the TLS connection alive between requests
-    s_http_ready = true;
+/**
+ * Pick the TLS trust mode and (re)configure the client when it changes.
+ * Certificates cannot be judged before the clock is set, so verification turns
+ * itself on the moment NTP lands.
+ */
+void ensureTlsMode() {
+  const bool want_verify = config::kAdsbVerifyTls && !s_tls_gave_up &&
+                           services::clock_time::synced();
+  if (s_http_ready && want_verify == s_tls_verified) {
+    return;
   }
+
+  s_http.end();
+  s_client.stop();
+  if (want_verify) {
+    s_client.setCACertBundle(kRootCaBundle);
+    Serial.println("adsb: TLS certificate verification on");
+  } else {
+    s_client.setInsecure();
+  }
+  s_tls_verified = want_verify;
+  s_http.setReuse(true);  // keep the TLS connection alive between requests
+  s_http_ready = true;
+}
+
+/** A verified connection that keeps failing falls back rather than going dark. */
+void noteTlsFailure() {
+  if (!s_tls_verified || s_tls_gave_up) {
+    return;
+  }
+  if (++s_tls_failures < config::kAdsbTlsFailuresBeforeFallback) {
+    return;
+  }
+  s_tls_gave_up = true;
+  Serial.println(
+      "adsb: certificate verification failed repeatedly — continuing "
+      "unverified (check the firmware's root CA bundle)");
+}
+
+bool httpGetJson(const String& url, JsonDocument& doc) {
+  ensureTlsMode();
   if (!s_http.begin(s_client, url)) {
     Serial.println("adsb: http.begin failed");
     return false;
@@ -251,8 +305,12 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   if (code != HTTP_CODE_OK) {
     Serial.printf("adsb: HTTP %d\n", code);
     s_http.end();
+    if (code < 0) {
+      noteTlsFailure();  // transport-level failure: a handshake reject looks like this
+    }
     return false;
   }
+  s_tls_failures = 0;
   String payload;
   if (!readResponseBodyWithPoll(s_http, payload)) {
     Serial.println("adsb: empty response");
@@ -272,6 +330,8 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
 }  // namespace
 
 void setPollFn(PollFn fn) { s_poll_fn = fn; }
+
+bool tlsVerified() { return s_tls_verified; }
 
 size_t aircraftCount() { return s_aircraft_count; }
 

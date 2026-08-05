@@ -10,15 +10,26 @@ struct Aircraft {
   float nose_deg;
   float track_deg;
   float gs_knots;
+  /** Barometric (or geometric) altitude in feet; only valid if alt_known. */
+  float alt_ft;
+  bool alt_known;
   char callsign[9];
   char type[5];
   char alt[12];
+  /** ICAO 24-bit address, lower case. Stable identity across fetches. */
+  char hex[8];
 };
 
 constexpr size_t kMaxAircraft = 64;
 
 size_t aircraftCount();
 const Aircraft* aircraftList();
+
+/**
+ * True while requests run against a verified certificate chain. False before
+ * the clock is set, and after a fallback to unverified.
+ */
+bool tlsVerified();
 
 /** millis() timestamp of the last successful fetch (0 if none yet). */
 unsigned long lastUpdateMillis();

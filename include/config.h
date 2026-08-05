@@ -1,10 +1,22 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <driver/gpio.h>
 
 namespace config {
+
+/**
+ * Shown on the config page and in /api/state so a flashed device can be told
+ * apart from another. CI stamps the git tag in via
+ * PLATFORMIO_BUILD_FLAGS='-DPLANE_RADAR_VERSION=\"v1.2.3\"'; local builds
+ * report "dev".
+ */
+#ifndef PLANE_RADAR_VERSION
+#define PLANE_RADAR_VERSION "dev"
+#endif
+constexpr char kFirmwareVersion[] = PLANE_RADAR_VERSION;
 
 // --- Wi-Fi portal ---
 constexpr char kPortalApName[] = "PlaneRadar-Setup";
@@ -113,8 +125,47 @@ constexpr unsigned long kRadarRedrawIntervalMs = 100;
 constexpr float kAircraftMaxExtrapolateSec = 15.0f;
 /** Legacy scale unused — fetch uses radar::fetchRadiusKm() to screen edge. */
 constexpr float kAdsbFetchRadiusScale = 1.0f;
+/**
+ * No successful fetch for this long → show the struck-through Wi-Fi badge with
+ * the age of the data. Longer than a couple of fetch intervals so a single
+ * hiccup stays invisible.
+ */
+constexpr unsigned long kNoDataWarnAfterMs = 15000;
+
+// --- Auto zoom (opt-in; picks the range preset from how busy the sky is) ---
+/** Empty radar for this long → widen the range one step. */
+constexpr unsigned long kAutoZoomOutAfterMs = 12000;
+/** Crowded for this long → tighten the range one step. */
+constexpr unsigned long kAutoZoomInAfterMs = 20000;
+/** "Crowded" means at least this many aircraft inside the outer ring. */
+constexpr size_t kAutoZoomInThreshold = 5;
+/** Only zoom in while at least this many aircraft would remain visible. */
+constexpr size_t kAutoZoomKeepVisible = 2;
+
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+// --- Time (NTP) ---
+/** Certificate validity is a date comparison, so TLS needs a real clock. */
+constexpr char kNtpServer1[] = "pool.ntp.org";
+constexpr char kNtpServer2[] = "time.cloudflare.com";
+constexpr char kNtpServer3[] = "time.google.com";
+/** How often to check whether SNTP has answered yet. */
+constexpr unsigned long kNtpPollIntervalMs = 1000;
+
+// --- TLS ---
+/**
+ * Verify the adsb.fi certificate against the root CA bundle built into the
+ * ESP-IDF image, once the clock is set. Before NTP syncs there is no way to
+ * judge validity dates, so the first fetches stay unverified.
+ *
+ * If verification keeps failing (a root rotation the firmware predates), the
+ * client falls back to unverified after kAdsbTlsFailuresBeforeFallback tries
+ * and says so on serial and in /api/state — a radar that stops showing
+ * aircraft would be a worse outcome than an unauthenticated public data feed.
+ */
+constexpr bool kAdsbVerifyTls = true;
+constexpr uint8_t kAdsbTlsFailuresBeforeFallback = 3;
 
 // --- Aircraft tracking (follow a callsign / registration) ---
 /** No fresh fix for the tracked aircraft this long → show "signal lost". */

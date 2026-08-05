@@ -2,6 +2,7 @@
 
 #include "ui/radar_theme.h"
 
+#include <Arduino.h>
 #include <Preferences.h>
 #include <cmath>
 #include <cstdio>
@@ -15,6 +16,10 @@ constexpr char kPrefsNamespace[] = "planeradar";
 constexpr char kPrefsRangeKey[] = "rangeIdx";
 constexpr char kPrefsMilesKey[] = "useMiles";
 constexpr char kPrefsRunwaysKey[] = "showRwys";
+constexpr char kPrefsAltMinKey[] = "altMin";
+constexpr char kPrefsAltMaxKey[] = "altMax";
+constexpr char kPrefsTrailsKey[] = "trails";
+constexpr char kPrefsAutoZoomKey[] = "autoZoom";
 constexpr uint8_t kDefaultRangeIndex = 1;  // 10 km ring
 constexpr float kKmPerMile = 1.609344f;
 
@@ -22,6 +27,10 @@ Preferences s_prefs;
 uint8_t s_range_index = kDefaultRangeIndex;
 bool s_use_miles = false;
 bool s_show_runways = true;
+int s_alt_min_ft = 0;  // 0 = no bound
+int s_alt_max_ft = 0;  // 0 = no bound
+bool s_show_trails = false;
+bool s_auto_zoom = false;
 
 void saveRangeIndex() {
   if (!s_prefs.begin(kPrefsNamespace, false)) {
@@ -44,6 +53,14 @@ void saveShowRunways() {
     return;
   }
   s_prefs.putBool(kPrefsRunwaysKey, s_show_runways);
+  s_prefs.end();
+}
+
+void saveOption(const char* key, bool value) {
+  if (!s_prefs.begin(kPrefsNamespace, false)) {
+    return;
+  }
+  s_prefs.putBool(key, value);
   s_prefs.end();
 }
 
@@ -70,6 +87,10 @@ void rangeInit() {
       (saved < kRangePresetCount) ? saved : kDefaultRangeIndex;
   s_use_miles = s_prefs.getBool(kPrefsMilesKey, false);
   s_show_runways = s_prefs.getBool(kPrefsRunwaysKey, true);
+  s_alt_min_ft = s_prefs.getInt(kPrefsAltMinKey, 0);
+  s_alt_max_ft = s_prefs.getInt(kPrefsAltMaxKey, 0);
+  s_show_trails = s_prefs.getBool(kPrefsTrailsKey, false);
+  s_auto_zoom = s_prefs.getBool(kPrefsAutoZoomKey, false);
   s_prefs.end();
 }
 
@@ -103,6 +124,64 @@ float fetchRadiusKm() {
 bool useMiles() { return s_use_miles; }
 
 bool showRunways() { return s_show_runways; }
+
+int altMinFt() { return s_alt_min_ft; }
+
+int altMaxFt() { return s_alt_max_ft; }
+
+void setAltFilter(int min_ft, int max_ft) {
+  if (min_ft < 0) {
+    min_ft = 0;
+  }
+  if (max_ft < 0) {
+    max_ft = 0;
+  }
+  // A window that excludes everything is almost certainly a typo; drop the cap.
+  if (min_ft > 0 && max_ft > 0 && max_ft < min_ft) {
+    max_ft = 0;
+  }
+  s_alt_min_ft = min_ft;
+  s_alt_max_ft = max_ft;
+  if (s_prefs.begin(kPrefsNamespace, false)) {
+    s_prefs.putInt(kPrefsAltMinKey, s_alt_min_ft);
+    s_prefs.putInt(kPrefsAltMaxKey, s_alt_max_ft);
+    s_prefs.end();
+  }
+  Serial.printf("Altitude filter: %d..%d ft (0 = off)\n", s_alt_min_ft,
+                s_alt_max_ft);
+}
+
+bool altitudePasses(float alt_ft, bool alt_known) {
+  if (s_alt_min_ft == 0 && s_alt_max_ft == 0) {
+    return true;
+  }
+  if (!alt_known) {
+    return true;  // never hide traffic just because it reports no altitude
+  }
+  if (s_alt_min_ft > 0 && alt_ft < static_cast<float>(s_alt_min_ft)) {
+    return false;
+  }
+  if (s_alt_max_ft > 0 && alt_ft > static_cast<float>(s_alt_max_ft)) {
+    return false;
+  }
+  return true;
+}
+
+bool showTrails() { return s_show_trails; }
+
+void setShowTrails(bool on) {
+  s_show_trails = on;
+  saveOption(kPrefsTrailsKey, on);
+  Serial.printf("Trails: %s\n", on ? "on" : "off");
+}
+
+bool autoZoom() { return s_auto_zoom; }
+
+void setAutoZoom(bool on) {
+  s_auto_zoom = on;
+  saveOption(kPrefsAutoZoomKey, on);
+  Serial.printf("Auto zoom: %s\n", on ? "on" : "off");
+}
 
 void saveMilesFromPortal(const char* checkbox_value) {
   s_use_miles = portalCheckboxChecked(checkbox_value);
