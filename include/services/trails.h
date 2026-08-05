@@ -19,7 +19,7 @@ namespace services::trails {
 constexpr size_t kMaxPoints = 6;
 
 /** Append the current positions; call once after each successful fetch. */
-void onFetch(const Aircraft* list, size_t count);
+void onFetch(const services::adsb::Aircraft* list, size_t count);
 
 /**
  * Copy the trail of `hex` into out_lat/out_lon, oldest first, and return how

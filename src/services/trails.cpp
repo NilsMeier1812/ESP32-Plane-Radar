@@ -74,7 +74,7 @@ void append(Track* t, float lat, float lon, unsigned long now) {
 
 }  // namespace
 
-void onFetch(const Aircraft* list, size_t count) {
+void onFetch(const services::adsb::Aircraft* list, size_t count) {
   const unsigned long now = millis();
 
   for (auto& t : s_tracks) {
