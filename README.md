@@ -111,6 +111,20 @@ Browsers only expose GPS over **HTTPS**, which the device (plain HTTP on the LAN
 
 After a Wi‑Fi reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
 
+### When no aircraft show up
+
+The **Diagnose** card on the companion page says why, which the display cannot: a radar with no aircraft looks the same whether the sky is quiet, the API is refusing requests, or the device has run out of memory.
+
+| Reading | Means |
+|---------|-------|
+| **Letzter Fehler** `keine Verbindung`, code < 0 | The request never completed — network, DNS, or a rejected TLS handshake. Try **Verbindung neu aufbauen**; if it only works with **TLS-Zertifikat prüfen** off, the root CA bundle in this firmware no longer matches the server. |
+| **Letzter Fehler** `Ratenlimit (HTTP 429)` | adsb.fi is throttling. The fetch interval backs off on its own; leave it be. |
+| **Letzter Fehler** `zu wenig Speicher` | Free heap dropped below what a TLS handshake needs. Compare **Heap frei** with **min** — a min that keeps falling over hours points at a leak. |
+| **Fehler in Folge** rising, **Abstand** growing | Working as intended: repeated failures widen the retry interval up to a minute so the loop (and this page) stay responsive. |
+| **Neustartgrund** ≠ 1 | The device rebooted on its own — brownout or crash, not a clean power-on. |
+
+A failing request blocks the main loop while it runs, because the HTTP client cannot be interrupted mid-connect. That is why the retry interval backs off rather than hammering every two seconds: it is the difference between one short stall a minute and a page that takes seconds to answer.
+
 ### "No data" badge
 
 When no fetch has succeeded for 15 s, a struck-through Wi‑Fi glyph with the age of the newest data appears at the bottom of the radar. An empty radar is otherwise ambiguous: quiet sky, or dead connection?
