@@ -7,6 +7,7 @@
 
 #include <cstring>
 
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #ifdef WM_MDNS
@@ -271,6 +272,8 @@ function renderDiag(){
     ['Abstand', Math.round((d.fetch_interval_ms||0)/1000) + ' s'],
     ['Heap frei / min', Math.round((d.heap_free||0)/1024) + ' / ' +
                         Math.round((d.heap_min||0)/1024) + ' kB'],
+    ['Größter Block', Math.round((d.heap_block||0)/1024) + ' kB',
+      (d.heap_block||0) < 22000 ? 'bad' : 'good'],
     ['WLAN-Signal', (d.rssi ?? '?') + ' dBm'],
     ['Laufzeit', Math.floor((d.uptime_s||0)/60) + ' min'],
     ['Neustartgrund', (d.reset_reason ?? '?') + ''],
@@ -420,6 +423,8 @@ void fillState(JsonObject o) {
   diag["last_error"] = h.last_error;
   diag["last_duration_ms"] = h.last_duration_ms;
   diag["heap_before_last"] = h.heap_before_last;
+  diag["heap_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  diag["block_before_last"] = h.largest_block_before;
   diag["fetch_interval_ms"] = services::adsb::fetchIntervalMs();
   diag["data_age_s"] =
       (h.last_ok_ms == 0) ? -1 : static_cast<long>((millis() - h.last_ok_ms) / 1000UL);

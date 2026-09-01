@@ -171,7 +171,14 @@ constexpr unsigned long kNtpPollIntervalMs = 1000;
  * and says so on serial and in /api/state — a radar that stops showing
  * aircraft would be a worse outcome than an unauthenticated public data feed.
  */
-constexpr bool kAdsbVerifyTls = true;
+/**
+ * Off by default on this board. Verification is the right thing to want, but
+ * on a C3 that already spends 115 kB on the frame buffer it needs more heap
+ * during the handshake than is reliably there, and a radar that shows nothing
+ * is worse than an unauthenticated public data feed. Turn it on from the
+ * config page once the heap readings show room (the setting is persisted).
+ */
+constexpr bool kAdsbVerifyTls = false;
 constexpr uint8_t kAdsbTlsFailuresBeforeFallback = 3;
 
 // --- ADS-B fetch resilience ---
@@ -192,8 +199,18 @@ constexpr uint16_t kAdsbRebuildEveryNFailures = 4;
  * socket the peer quietly dropped otherwise stays broken until a reboot.
  */
 constexpr unsigned long kAdsbConnectionMaxAgeMs = 300000;  // 5 min
-/** Below this free heap a TLS handshake cannot succeed; skip and report. */
-constexpr uint32_t kAdsbMinHeapForFetch = 40000;
+/**
+ * Minimum largest *contiguous* free block for a fetch. mbedTLS wants one big
+ * run for its record buffers, so total free heap is the wrong measure. Below
+ * this the attempt would stall for seconds and fail anyway.
+ */
+constexpr uint32_t kAdsbMinHeapForFetch = 22000;
+/**
+ * Free the frame buffer before a fetch once the largest block drops below
+ * this — trading double-buffering for a working data feed is a good deal, and
+ * the next draw simply allocates it again.
+ */
+constexpr uint32_t kAdsbReleaseFrameBelow = 80000;
 
 // --- Aircraft tracking (follow a callsign / registration) ---
 /** No fresh fix for the tracked aircraft this long → show "signal lost". */

@@ -920,6 +920,14 @@ LGFX_Sprite* radarFrameSprite() {
   return ensureFrameSprite() ? &s_frame : nullptr;
 }
 
+void radarReleaseFrameSprite() {
+  if (!s_frame_ready) {
+    return;
+  }
+  s_frame.deleteSprite();
+  s_frame_ready = false;
+}
+
 void radarDisplayDraw() {
   initPalette();
   initLabelMetrics();

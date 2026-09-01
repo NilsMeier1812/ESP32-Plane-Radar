@@ -11,6 +11,14 @@ namespace ui {
  */
 LGFX_Sprite* radarFrameSprite();
 
+/**
+ * Free the frame buffer (240x240x16bpp = 115 kB — by far the largest single
+ * allocation). It is dead weight while the loop sits in a network call, and
+ * that is exactly when a TLS handshake needs a big contiguous block. The next
+ * draw allocates it again; if that fails, drawing falls back to the panel.
+ */
+void radarReleaseFrameSprite();
+
 /** Draw the static sonar/radar grid (black disc, green overlay, labels). */
 void radarDisplayDraw();
 

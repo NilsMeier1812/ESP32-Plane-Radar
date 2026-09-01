@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #include <lgfx/v1/lgfx_fonts.hpp>
@@ -81,6 +82,10 @@ void buildDataPage() {
   addLine("HEAP %lu/%luk",
           static_cast<unsigned long>(ESP.getFreeHeap() / 1024UL),
           static_cast<unsigned long>(ESP.getMinFreeHeap() / 1024UL));
+  // The block size is what a handshake actually needs, so it earns its line.
+  addLine("BLOCK %luk",
+          static_cast<unsigned long>(
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024UL));
   addLine("TLS %d  NTP %d", services::adsb::tlsVerified() ? 1 : 0,
           services::clock_time::synced() ? 1 : 0);
 }
@@ -174,6 +179,8 @@ void debugScreenLog() {
                 services::adsb::fetchIntervalMs(),
                 static_cast<unsigned long>(h.last_duration_ms),
                 static_cast<unsigned long>(h.heap_before_last));
+  Serial.printf("block=%lu\n", static_cast<unsigned long>(
+      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
   Serial.printf("heap=%lu min=%lu wifi=%d rssi=%d ip=%s ssid=%s\n",
                 static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getMinFreeHeap()),

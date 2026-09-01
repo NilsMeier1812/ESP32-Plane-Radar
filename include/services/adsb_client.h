@@ -73,6 +73,8 @@ struct Health {
   uint32_t last_duration_ms;
   /** Free heap right before the last attempt, for spotting exhaustion. */
   uint32_t heap_before_last;
+  /** Largest contiguous block before the last attempt — what TLS really needs. */
+  uint32_t largest_block_before;
   char last_error[48];
 };
 

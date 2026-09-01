@@ -6,6 +6,8 @@
 
 #include <ArduinoJson.h>
 
+#include <esp_heap_caps.h>
+
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -373,10 +375,33 @@ void noteSuccess() {
   setError("");
 }
 
+/**
+ * Only these fields are ever read, but the API sends ~40 per aircraft. Parsing
+ * the lot builds a document several times larger than needed, on a device that
+ * is already short on heap — so hand ArduinoJson a filter and let it discard
+ * the rest as it parses.
+ */
+const JsonDocument& responseFilter() {
+  static JsonDocument filter;
+  if (filter.isNull()) {
+    JsonObject ac = filter["ac"][0].to<JsonObject>();
+    for (const char* key :
+         {"lat", "lon", "hex", "flight", "r", "t", "alt_baro", "alt_geom",
+          "gs", "tas", "ias", "track", "true_heading", "mag_heading", "dir"}) {
+      ac[key] = true;
+    }
+  }
+  return filter;
+}
+
 bool httpGetJson(const String& url, JsonDocument& doc) {
   const unsigned long started = millis();
   s_health.last_attempt_ms = started;
   s_health.heap_before_last = ESP.getFreeHeap();
+  // A handshake needs one big contiguous block; total free can look fine while
+  // the largest run is far too small, so judge on that.
+  s_health.largest_block_before =
+      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 
   struct DurationGuard {
     unsigned long start;
@@ -387,7 +412,7 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
 
   // A TLS handshake needs a sizeable contiguous block. Attempting one without
   // it stalls the loop for seconds and fails anyway, so skip and say so.
-  if (s_health.heap_before_last < config::kAdsbMinHeapForFetch) {
+  if (s_health.largest_block_before < config::kAdsbMinHeapForFetch) {
     noteFailure(0, Fail::LowHeap, "zu wenig Speicher");
     s_force_rebuild = true;
     return false;
@@ -425,7 +450,8 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   }
   s_http.end();  // with setReuse(true) this keeps the socket open for next time
 
-  const DeserializationError err = deserializeJson(doc, payload);
+  const DeserializationError err = deserializeJson(
+      doc, payload, DeserializationOption::Filter(responseFilter()));
   if (err) {
     noteFailure(code, Fail::BadJson, err.c_str());
     return false;
