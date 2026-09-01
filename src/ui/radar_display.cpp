@@ -916,6 +916,10 @@ bool radarAutoZoomTick() {
   return true;
 }
 
+LGFX_Sprite* radarFrameSprite() {
+  return ensureFrameSprite() ? &s_frame : nullptr;
+}
+
 void radarDisplayDraw() {
   initPalette();
   initLabelMetrics();

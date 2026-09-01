@@ -41,9 +41,27 @@ void setTlsVerifyEnabled(bool on);
  * limit (HTTP 429) from a refused handshake (negative code) from a device that
  * has run out of heap — none of which look any different on the display.
  */
+/**
+ * Compact reason for the last failure. Numeric so the device can show it on
+ * the 240x240 display, where a sentence does not fit: read the number off the
+ * debug screen and it says exactly which of these happened.
+ */
+enum class Fail : uint8_t {
+  None = 0,          // last fetch succeeded
+  NoConnection = 1,  // transport failed: network, DNS, or rejected handshake
+  RateLimit = 2,     // HTTP 429 — the API is throttling us
+  HttpError = 3,     // any other non-200 status
+  EmptyBody = 4,     // connected, status 200, but no payload arrived
+  LowHeap = 5,       // not enough free heap to attempt a TLS handshake
+  BeginFailed = 6,   // HTTPClient could not even parse/open the URL
+  BadJson = 7,       // payload arrived but did not parse
+};
+
 struct Health {
   /** Last code from the API: >0 is an HTTP status, <0 an HTTPClient error. */
   int last_http_code;
+  /** Numeric failure reason, mirrored by last_error as text. */
+  Fail last_fail;
   /** Consecutive failed fetches; drives the retry backoff. */
   uint16_t consecutive_failures;
   uint32_t ok_count;

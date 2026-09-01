@@ -347,7 +347,8 @@ void noteTlsFailure() {
       "unverified (check the firmware's root CA bundle)");
 }
 
-void noteFailure(int code, const char* what) {
+void noteFailure(int code, Fail kind, const char* what) {
+  s_health.last_fail = kind;
   ++s_health.fail_count;
   ++s_health.consecutive_failures;
   s_health.last_http_code = code;
@@ -367,6 +368,7 @@ void noteSuccess() {
   s_health.consecutive_failures = 0;
   s_health.last_ok_ms = millis();
   s_health.last_http_code = HTTP_CODE_OK;
+  s_health.last_fail = Fail::None;
   s_tls_failures = 0;
   setError("");
 }
@@ -386,14 +388,14 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   // A TLS handshake needs a sizeable contiguous block. Attempting one without
   // it stalls the loop for seconds and fails anyway, so skip and say so.
   if (s_health.heap_before_last < config::kAdsbMinHeapForFetch) {
-    noteFailure(0, "zu wenig Speicher");
+    noteFailure(0, Fail::LowHeap, "zu wenig Speicher");
     s_force_rebuild = true;
     return false;
   }
 
   ensureTlsMode();
   if (!s_http.begin(s_client, url)) {
-    noteFailure(0, "http.begin fehlgeschlagen");
+    noteFailure(0, Fail::BeginFailed, "http.begin fehlgeschlagen");
     s_force_rebuild = true;
     return false;
   }
@@ -405,19 +407,19 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   if (code != HTTP_CODE_OK) {
     s_http.end();
     if (code < 0) {
-      noteFailure(code, "keine Verbindung");
+      noteFailure(code, Fail::NoConnection, "keine Verbindung");
       noteTlsFailure();  // a rejected handshake also surfaces as a negative code
     } else if (code == 429) {
-      noteFailure(code, "Ratenlimit (HTTP 429)");
+      noteFailure(code, Fail::RateLimit, "Ratenlimit (HTTP 429)");
     } else {
-      noteFailure(code, "HTTP-Fehler");
+      noteFailure(code, Fail::HttpError, "HTTP-Fehler");
     }
     return false;
   }
   String payload;
   if (!readResponseBodyWithPoll(s_http, payload)) {
     s_http.end();
-    noteFailure(code, "leere Antwort");
+    noteFailure(code, Fail::EmptyBody, "leere Antwort");
     s_force_rebuild = true;
     return false;
   }
@@ -425,7 +427,7 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
 
   const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
-    noteFailure(code, err.c_str());
+    noteFailure(code, Fail::BadJson, err.c_str());
     return false;
   }
   noteSuccess();

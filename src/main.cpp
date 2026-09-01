@@ -15,6 +15,7 @@
 #include "services/trails.h"
 #include "services/wifi_networks.h"
 #include "services/wifi_setup.h"
+#include "ui/debug_screen.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
@@ -23,6 +24,11 @@ namespace {
 
 bool g_radar_visible = false;
 bool g_standby = false;
+bool g_debug_visible = false;
+uint8_t g_debug_page = 0;
+unsigned long g_debug_drawn_ms = 0;
+/** Timestamp of a tap still waiting to be classified as single or double. */
+unsigned long g_pending_tap_ms = 0;
 int g_hint_phase = -1;  // -1 none, 0 "release for standby", 1 "hold for reset"
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
@@ -90,6 +96,38 @@ bool updateHoldHint() {
   return phase >= 0;
 }
 
+void enterDebug() {
+  g_debug_visible = true;
+  g_debug_page = 0;
+  g_debug_drawn_ms = 0;
+  ui::debugScreenLog();
+  Serial.println("Debug screen on");
+}
+
+void exitDebug() {
+  g_debug_visible = false;
+  g_radar_visible = false;  // force a full radar redraw
+  Serial.println("Debug screen off");
+}
+
+/** Single tap = zoom (or page in debug), double tap = toggle the debug screen. */
+void onSingleTap() {
+  if (g_debug_visible) {
+    g_debug_page = static_cast<uint8_t>((g_debug_page + 1) % ui::kDebugPageCount);
+    g_debug_drawn_ms = 0;
+    return;
+  }
+  onRangeTap();
+}
+
+void onDoubleTap() {
+  if (g_debug_visible) {
+    exitDebug();
+  } else {
+    enterDebug();
+  }
+}
+
 void handleBootButton() {
   bootButtonPollLongPress();
   if (bootButtonConsumeStandby()) {
@@ -98,11 +136,27 @@ void handleBootButton() {
     } else {
       enterStandby();
     }
+    g_pending_tap_ms = 0;
     g_hint_phase = -1;
     return;
   }
+
   if (!g_standby && bootButtonConsumeTap()) {
-    onRangeTap();
+    const unsigned long now = millis();
+    if (g_pending_tap_ms != 0 &&
+        now - g_pending_tap_ms <= config::kBootDoubleTapMs) {
+      g_pending_tap_ms = 0;
+      onDoubleTap();
+    } else {
+      g_pending_tap_ms = (now == 0) ? 1 : now;  // 0 means "nothing pending"
+    }
+  }
+
+  // A tap only counts as single once the double-tap window has passed.
+  if (g_pending_tap_ms != 0 &&
+      millis() - g_pending_tap_ms > config::kBootDoubleTapMs) {
+    g_pending_tap_ms = 0;
+    onSingleTap();
   }
 }
 
@@ -175,6 +229,22 @@ void loop() {
   wifiLoop();
 
   if (g_standby) {
+    delay(10);
+    return;
+  }
+
+  if (g_debug_visible) {
+    const unsigned long now = millis();
+    if (now - g_debug_drawn_ms >= config::kDebugRefreshMs) {
+      g_debug_drawn_ms = now;
+      ui::debugScreenDraw(g_debug_page);
+    }
+    // Keep fetching underneath: the whole point is watching it recover.
+    if (WiFi.status() == WL_CONNECTED &&
+        now - g_last_adsb_fetch_ms >= services::adsb::fetchIntervalMs()) {
+      g_last_adsb_fetch_ms = now;
+      fetchAircraft();
+    }
     delay(10);
     return;
   }

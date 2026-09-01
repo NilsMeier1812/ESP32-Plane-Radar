@@ -731,7 +731,12 @@ void handleReconnectPost() {
   sendState(200, true, "Verbindung wird neu aufgebaut");
 }
 
-void handlePage() { s_server.send_P(200, "text/html; charset=utf-8", kPage); }
+void handlePage() {
+  // The page ships inside the firmware, so a cached copy survives an update
+  // and quietly hides whatever the new version added.
+  s_server.sendHeader("Cache-Control", "no-store");
+  s_server.send_P(200, "text/html; charset=utf-8", kPage);
+}
 
 }  // namespace
 

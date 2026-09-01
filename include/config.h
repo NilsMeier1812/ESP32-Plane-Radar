@@ -83,6 +83,13 @@ constexpr int8_t kWifiTxPowerAp = 34;
 constexpr gpio_num_t kBootPin = GPIO_NUM_9;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
+/**
+ * Two taps within this window open (or leave) the on-device debug screen.
+ * A single tap is therefore held back this long before it cycles the zoom.
+ */
+constexpr unsigned long kBootDoubleTapMs = 400UL;
+/** Debug screen refresh; slow enough to read, fast enough to look live. */
+constexpr unsigned long kDebugRefreshMs = 500UL;
 /** Hold at least this long (but less than reset) to toggle standby. */
 constexpr unsigned long kBootStandbyHoldMs = 1500UL;
 /** Show the "keep holding for Wi-Fi reset" hint from here. */

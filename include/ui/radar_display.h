@@ -1,6 +1,15 @@
 #pragma once
 
+#include <LovyanGFX.hpp>
+
 namespace ui {
+
+/**
+ * The off-screen frame buffer the radar composites into, so other full-screen
+ * views can reuse it and stay flicker-free. Null when the allocation failed;
+ * callers then draw straight to the panel.
+ */
+LGFX_Sprite* radarFrameSprite();
 
 /** Draw the static sonar/radar grid (black disc, green overlay, labels). */
 void radarDisplayDraw();
