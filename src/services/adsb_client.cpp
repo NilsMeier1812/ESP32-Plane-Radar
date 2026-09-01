@@ -98,42 +98,20 @@ int performGetWithPoll(HTTPClient& http) {
   return code;
 }
 
-bool readResponseBodyWithPoll(HTTPClient& http, String& payload) {
-  WiFiClient* stream = http.getStreamPtr();
-  if (stream == nullptr) {
-    return false;
-  }
-
-  const int content_length = http.getSize();
-  if (content_length > 0) {
-    payload.reserve(static_cast<unsigned>(content_length + 1));
-  }
-
-  uint8_t buffer[512];
-  const unsigned long deadline = millis() + kRequestTimeoutMs;
-  while (millis() < deadline) {
-    pollNetwork();
-    const int available = stream->available();
-    if (available > 0) {
-      const int to_read =
-          available > static_cast<int>(sizeof(buffer)) ? static_cast<int>(sizeof(buffer))
-                                                       : available;
-      const int read_bytes = stream->readBytes(buffer, to_read);
-      if (read_bytes > 0) {
-        payload.concat(reinterpret_cast<const char*>(buffer),
-                       static_cast<unsigned>(read_bytes));
-      }
-    }
-    if (content_length > 0 &&
-        static_cast<int>(payload.length()) >= content_length) {
-      break;
-    }
-    if (!http.connected() && stream->available() <= 0) {
-      break;
-    }
-    delay(1);
-  }
-
+/**
+ * Read the body through HTTPClient rather than off the raw stream.
+ *
+ * The API answers with Transfer-Encoding: chunked, where getSize() is -1 and
+ * the stream carries the chunk framing (hex length lines and CRLFs) inline.
+ * Reading it directly meant the loop never saw an end and ran into its timeout
+ * every time, and the payload was not valid JSON — ArduinoJson parsed the
+ * leading hex length as a number, reported success, and left an empty document
+ * behind. The result was a radar that fetched happily and showed nothing.
+ */
+bool readResponseBody(HTTPClient& http, String& payload) {
+  pollNetwork();
+  payload = http.getString();
+  pollNetwork();
   return payload.length() > 0;
 }
 
@@ -375,25 +353,6 @@ void noteSuccess() {
   setError("");
 }
 
-/**
- * Only these fields are ever read, but the API sends ~40 per aircraft. Parsing
- * the lot builds a document several times larger than needed, on a device that
- * is already short on heap — so hand ArduinoJson a filter and let it discard
- * the rest as it parses.
- */
-const JsonDocument& responseFilter() {
-  static JsonDocument filter;
-  if (filter.isNull()) {
-    JsonObject ac = filter["ac"][0].to<JsonObject>();
-    for (const char* key :
-         {"lat", "lon", "hex", "flight", "r", "t", "alt_baro", "alt_geom",
-          "gs", "tas", "ias", "track", "true_heading", "mag_heading", "dir"}) {
-      ac[key] = true;
-    }
-  }
-  return filter;
-}
-
 bool httpGetJson(const String& url, JsonDocument& doc) {
   const unsigned long started = millis();
   s_health.last_attempt_ms = started;
@@ -442,7 +401,7 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
     return false;
   }
   String payload;
-  if (!readResponseBodyWithPoll(s_http, payload)) {
+  if (!readResponseBody(s_http, payload)) {
     s_http.end();
     noteFailure(code, Fail::EmptyBody, "leere Antwort");
     s_force_rebuild = true;
@@ -450,10 +409,16 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   }
   s_http.end();  // with setReuse(true) this keeps the socket open for next time
 
-  const DeserializationError err = deserializeJson(
-      doc, payload, DeserializationOption::Filter(responseFilter()));
+  const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
     noteFailure(code, Fail::BadJson, err.c_str());
+    return false;
+  }
+  // deserializeJson stops after the first complete value and ignores whatever
+  // follows, so a mangled body can parse "successfully" into a number. Insist
+  // on the object the API actually returns, or the failure stays invisible.
+  if (!doc.is<JsonObject>()) {
+    noteFailure(code, Fail::BadJson, "Antwort ist kein JSON-Objekt");
     return false;
   }
   noteSuccess();

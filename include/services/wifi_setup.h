@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 /** True when the next boot should show the setup screen first (after credential reset). */
 bool wifiShowsSetupScreenOnBoot();
 void wifiResetCredentialsAndReboot();
@@ -7,6 +9,13 @@ void wifiResetCredentialsAndReboot();
 bool wifiSetupConnect();
 /** Reconnect using saved creds; never opens the captive portal. */
 bool wifiReconnect();
+/**
+ * How often the link has dropped since boot. A screen that blinks every few
+ * seconds looks the same whether the Wi-Fi is flapping or the radar is
+ * redrawing badly; this number separates the two.
+ */
+uint32_t wifiDisconnectCount();
+
 /** Keeps the LAN config portal alive; call every loop() iteration. */
 void wifiLoop();
 bool wifiBootButtonPressed();

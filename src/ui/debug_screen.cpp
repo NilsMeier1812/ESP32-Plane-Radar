@@ -16,6 +16,7 @@
 #include "hardware/display_font.h"
 #include "services/adsb_client.h"
 #include "services/clock_time.h"
+#include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
@@ -108,6 +109,7 @@ void buildSystemPage() {
   addLine("%s", ssid);
 
   addLine("UP %s  RST %d", uptime, static_cast<int>(esp_reset_reason()));
+  addLine("DROPS %lu", static_cast<unsigned long>(wifiDisconnectCount()));
   addLine("HEAP %lu/%luk",
           static_cast<unsigned long>(ESP.getFreeHeap() / 1024UL),
           static_cast<unsigned long>(ESP.getMinFreeHeap() / 1024UL));

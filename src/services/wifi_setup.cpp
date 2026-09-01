@@ -75,6 +75,7 @@ bool s_events_registered = false;
 /** Set by the GOT_IP event; makes wifiLoop re-announce mDNS after a reconnect. */
 volatile bool s_link_up_pending = false;
 uint8_t s_soft_reconnect_tries = 0;
+uint32_t s_disconnect_count = 0;
 
 void ensureWifiManager();
 bool wifiLinkUp();
@@ -307,6 +308,7 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
       const uint8_t reason = info.wifi_sta_disconnected.reason;
+      ++s_disconnect_count;
       Serial.printf("WiFi down: reason %u (%s)\n", reason,
                     disconnectReasonName(reason));
       break;
@@ -622,6 +624,8 @@ void bootButtonPollLongPress() {
     s_long_press_handled = false;
   }
 }
+
+uint32_t wifiDisconnectCount() { return s_disconnect_count; }
 
 void wifiResetCredentialsAndReboot() {
   resetWifiCredentials();

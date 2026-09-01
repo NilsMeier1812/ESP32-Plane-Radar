@@ -20,6 +20,7 @@
 #include "services/radar_location.h"
 #include "services/tracking.h"
 #include "services/wifi_networks.h"
+#include "services/wifi_setup.h"
 #include "ui/radar_range.h"
 
 namespace services::config_server {
@@ -277,6 +278,8 @@ function renderDiag(){
     ['WLAN-Signal', (d.rssi ?? '?') + ' dBm'],
     ['Laufzeit', Math.floor((d.uptime_s||0)/60) + ' min'],
     ['Neustartgrund', (d.reset_reason ?? '?') + ''],
+    ['WLAN-Abbrüche', (d.wifi_drops ?? 0) + '',
+      (d.wifi_drops||0) > 3 ? 'bad' : 'good'],
     ['TLS', S.tls_verified ? 'geprüft' : 'ungeprüft'],
   ];
   box.innerHTML = '';
@@ -416,6 +419,7 @@ void fillState(JsonObject o) {
   diag["heap_min"] = ESP.getMinFreeHeap();
   diag["rssi"] = WiFi.RSSI();
   diag["reset_reason"] = static_cast<int>(esp_reset_reason());
+  diag["wifi_drops"] = wifiDisconnectCount();
   diag["last_http_code"] = h.last_http_code;
   diag["fails_in_row"] = h.consecutive_failures;
   diag["ok_count"] = h.ok_count;
