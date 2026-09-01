@@ -322,9 +322,25 @@ void noteTlsFailure() {
   }
   s_tls_gave_up = true;
   s_force_rebuild = true;
+
+  // Remember it. Otherwise every reboot repeats the same sequence: fetches
+  // work until NTP lands, verification switches itself on, fails, and the
+  // radar goes quiet for as long as the fallback takes — which is exactly the
+  // "runs fine for fifteen seconds after a restart" report.
+  s_tls_verify_enabled = false;
+  Preferences prefs;
+  if (prefs.begin(kPrefsNamespace, false)) {
+    prefs.putBool(kPrefsTlsKey, false);
+    prefs.end();
+  }
+
+  // Recovering is now one unverified request away, so do not make the backoff
+  // sit on it for another eight seconds.
+  s_health.consecutive_failures = 0;
+
   Serial.println(
-      "adsb: certificate verification failed repeatedly — continuing "
-      "unverified (check the firmware's root CA bundle)");
+      "adsb: certificate verification failed repeatedly — switched off and "
+      "saved (this board has too little contiguous heap for the handshake)");
 }
 
 void noteFailure(int code, Fail kind, const char* what) {

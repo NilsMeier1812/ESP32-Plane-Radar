@@ -87,7 +87,10 @@ void buildDataPage() {
   addLine("BLOCK %luk",
           static_cast<unsigned long>(
               heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024UL));
-  addLine("TLS %d  NTP %d", services::adsb::tlsVerified() ? 1 : 0,
+  // TLS = verification actually in use, VRFY = the stored setting. They differ
+  // while the clock is still unset, or after the automatic fallback.
+  addLine("TLS %d/%d  NTP %d", services::adsb::tlsVerified() ? 1 : 0,
+          services::adsb::tlsVerifyEnabled() ? 1 : 0,
           services::clock_time::synced() ? 1 : 0);
 }
 
