@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plane Radar — Kartenvorschau</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --panel: #141b2e;
+    --line: #263149;
+    --text: #dbe3f0;
+    --dim: #8a97ad;
+    --accent: #4bd07a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--dim); margin: 0 0 20px; max-width: 60ch; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; min-width: 280px;
+  }
+  label { display: block; margin: 10px 0 3px; color: var(--dim); font-size: 12px; }
+  input, select, button {
+    width: 100%; padding: 7px 9px; border-radius: 6px;
+    border: 1px solid var(--line); background: #0d1322; color: var(--text);
+    font: inherit; font-size: 13px;
+  }
+  button {
+    background: var(--accent); color: #06210f; border: none;
+    font-weight: 600; cursor: pointer; margin-top: 14px;
+  }
+  button:hover { filter: brightness(1.1); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  canvas {
+    border-radius: 50%; background: #04070f; display: block;
+    width: 480px; height: 480px; image-rendering: pixelated;
+  }
+  .canvas-note { color: var(--dim); font-size: 12px; margin-top: 8px; }
+  #stats { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; }
+  .err { color: #ff8080; }
+</style>
+</head>
+<body>
+
+<h1>Plane Radar — Kartenvorschau</h1>
+<p class="lede">
+  Rendert die generierten PRT1-Kacheln so, wie das Display sie zeigen würde:
+  240&nbsp;×&nbsp;240&nbsp;Pixel, runde Maske, Radarfarben. Damit lässt sich
+  vor jeder Firmware-Zeile beurteilen, ob Detailgrad und Datenmenge stimmen.
+</p>
+
+<div class="wrap">
+  <div class="panel">
+    <label for="base">Basis-URL der Kacheln</label>
+    <input id="base" value="../maptiles/netherlands">
+
+    <label for="dir">…oder heruntergeladenes Artefakt-Verzeichnis</label>
+    <input id="dir" type="file" webkitdirectory directory multiple>
+
+    <div class="row">
+      <div>
+        <label for="lat">Breite</label>
+        <input id="lat" value="52.3676">
+      </div>
+      <div>
+        <label for="lon">Länge</label>
+        <input id="lon" value="4.9041">
+      </div>
+    </div>
+
+    <label for="range">Reichweite (Ring 3)</label>
+    <select id="range">
+      <option value="5">5 km</option>
+      <option value="10">10 km</option>
+      <option value="15">15 km</option>
+      <option value="25" selected>25 km</option>
+    </select>
+
+    <label for="zoom">Zoomstufe</label>
+    <select id="zoom"><option value="auto">automatisch</option></select>
+
+    <button id="go">Zeichnen</button>
+
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div>
+    <canvas id="view" width="240" height="240"></canvas>
+    <div class="canvas-note">
+      Auf 480&nbsp;px vergrößert — jedes Quadrat ist ein echtes Displaypixel.
+    </div>
+  </div>
+
+  <div class="panel" style="flex:1">
+    <strong>Messwerte</strong>
+    <div id="stats">Noch nichts geladen.</div>
+  </div>
+</div>
+
+<script>
+// Mirrors scripts/maptiles/FORMAT.md. Keep the two in step.
+const MAGIC = 0x31545250; // "PRT1" little-endian
+const TILE_UNITS = 4096;
+const RING3_TO_OUTER = 4 / 3;
+const GRID_OUTER_PX = 107;   // matches radar::kGridOuterRadius
+
+// Dimmer than the radar grid on purpose: the map sits *under* the aircraft
+// and must never compete with them for attention.
+const LAYERS = {
+  1: { name: 'Küste',      color: '#2a6f86', width: 1.0 },
+  2: { name: 'Gewässer',   color: '#1e5470', width: 1.0 },
+  3: { name: 'Fluss',      color: '#1b4a63', width: 1.0 },
+  4: { name: 'Autobahn',   color: '#6b5a26', width: 1.0 },
+  5: { name: 'Hauptstr.',  color: '#42381a', width: 1.0 },
+  6: { name: 'Bahn',       color: '#3d4250', width: 1.0 },
+};
+
+const $ = (id) => document.getElementById(id);
+let localFiles = null;   // Map<path, File> when a directory was picked
+let manifest = null;
+
+function project(lon, lat) {
+  const clamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const s = Math.sin(clamped * Math.PI / 180);
+  return [
+    (lon + 180) / 360,
+    0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI),
+  ];
+}
+
+function metresPerWorldUnit(lat) {
+  return 2 * Math.PI * 6378137 * Math.cos(lat * Math.PI / 180);
+}
+
+function parseTile(buffer) {
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== MAGIC) throw new Error('kein PRT1-Tile');
+  const layerCount = view.getUint8(5);
+  let offset = 16;
+  const layers = [];
+  for (let i = 0; i < layerCount; i++) {
+    const id = view.getUint8(offset);
+    const lineCount = view.getUint16(offset + 2, true);
+    const byteLen = view.getUint32(offset + 4, true);
+    offset += 8;
+    const end = offset + byteLen;
+    const lines = [];
+    for (let l = 0; l < lineCount; l++) {
+      const n = view.getUint16(offset, true);
+      offset += 2;
+      const pts = new Int16Array(n * 2);
+      for (let p = 0; p < n; p++) {
+        pts[p * 2] = view.getInt16(offset, true);
+        pts[p * 2 + 1] = view.getInt16(offset + 2, true);
+        offset += 4;
+      }
+      lines.push(pts);
+    }
+    if (offset !== end) throw new Error('Layer ' + id + ': Längenfehler');
+    layers.push({ id, lines });
+  }
+  return layers;
+}
+
+async function fetchPath(path) {
+  if (localFiles) {
+    const file = localFiles.get(path) || localFiles.get(path.replace(/^\.\//, ''));
+    if (!file) return null;
+    return file.arrayBuffer();
+  }
+  const base = $('base').value.replace(/\/+$/, '');
+  const res = await fetch(base + '/' + path);
+  if (res.status === 404) return null;   // empty tile: nothing to draw here
+  if (!res.ok) throw new Error(path + ': HTTP ' + res.status);
+  return res.arrayBuffer();
+}
+
+async function loadManifest() {
+  const buf = await fetchPath('manifest.json');
+  if (!buf) throw new Error('manifest.json nicht gefunden');
+  manifest = JSON.parse(new TextDecoder().decode(buf));
+  const select = $('zoom');
+  select.innerHTML = '<option value="auto">automatisch</option>';
+  for (const z of manifest.zooms) {
+    const opt = document.createElement('option');
+    opt.value = z.zoom;
+    opt.textContent = 'z' + z.zoom + ' (' + z.tolerance_m + ' m)';
+    select.appendChild(opt);
+  }
+  return manifest;
+}
+
+function pickZoom(outerKm) {
+  const choice = $('zoom').value;
+  if (choice !== 'auto') return parseInt(choice, 10);
+  const available = manifest.zooms.map((z) => z.zoom).sort((a, b) => a - b);
+  // Wide views take the coarse level; close views the fine one. The split at
+  // 20 km mirrors the radar's own range presets.
+  return outerKm > 20 ? available[0] : available[available.length - 1];
+}
+
+async function render() {
+  const stats = $('stats');
+  const canvas = $('view');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 240, 240);
+  ctx.fillStyle = 'rgb(4,10,28)';
+  ctx.fillRect(0, 0, 240, 240);
+
+  try {
+    if (!manifest) await loadManifest();
+
+    const lat = parseFloat($('lat').value);
+    const lon = parseFloat($('lon').value);
+    const outerKm = parseFloat($('range').value) * RING3_TO_OUTER;
+    const zoom = pickZoom(outerKm);
+    const n = 1 << zoom;
+
+    const [cwx, cwy] = project(lon, lat);
+    const worldPerM = 1 / metresPerWorldUnit(lat);
+    const outerWorld = outerKm * 1000 * worldPerM;
+    const pxPerWorld = GRID_OUTER_PX / outerWorld;
+
+    const toScreen = (wx, wy) => [
+      120 + (wx - cwx) * pxPerWorld,
+      120 + (wy - cwy) * pxPerWorld,
+    ];
+
+    // Tiles overlapping the square that circumscribes the visible circle.
+    const half = outerWorld * (120 / GRID_OUTER_PX);
+    const tx0 = Math.max(0, Math.floor((cwx - half) * n));
+    const tx1 = Math.min(n - 1, Math.floor((cwx + half) * n));
+    const ty0 = Math.max(0, Math.floor((cwy - half) * n));
+    const ty1 = Math.min(n - 1, Math.floor((cwy + half) * n));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(120, 120, 119, 0, Math.PI * 2);
+    ctx.clip();
+
+    let bytes = 0;
+    let found = 0;
+    let missing = 0;
+    let segments = 0;
+    const perLayer = {};
+
+    for (let tx = tx0; tx <= tx1; tx++) {
+      for (let ty = ty0; ty <= ty1; ty++) {
+        const buf = await fetchPath(zoom + '/' + tx + '/' + ty + '.prt');
+        if (!buf) { missing++; continue; }
+        bytes += buf.byteLength;
+        found++;
+
+        for (const layer of parseTile(buf)) {
+          const style = LAYERS[layer.id];
+          if (!style) continue;
+          perLayer[layer.id] = (perLayer[layer.id] || 0) + layer.lines.length;
+          ctx.strokeStyle = style.color;
+          ctx.lineWidth = style.width;
+          ctx.beginPath();
+          for (const line of layer.lines) {
+            for (let p = 0; p < line.length / 2; p++) {
+              const wx = (tx + line[p * 2] / TILE_UNITS) / n;
+              const wy = (ty + line[p * 2 + 1] / TILE_UNITS) / n;
+              const [sx, sy] = toScreen(wx, wy);
+              if (p === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+            }
+            segments += line.length / 2 - 1;
+          }
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+
+    drawRadarGrid(ctx);
+
+    const tilesWide = tx1 - tx0 + 1;
+    const tilesHigh = ty1 - ty0 + 1;
+    stats.classList.remove('err');
+    stats.textContent = [
+      'Region      ' + manifest.region,
+      'Zoomstufe   z' + zoom,
+      'Kacheln     ' + tilesWide + '×' + tilesHigh +
+        '  (' + found + ' mit Daten, ' + missing + ' leer)',
+      'Übertragen  ' + (bytes / 1024).toFixed(1) + ' kB',
+      'Pro Kachel  ' + (found ? Math.round(bytes / found) : 0) + ' B',
+      'Segmente    ' + segments,
+      '',
+      'RAM-Budget  ' + (bytes <= 30720
+        ? 'passt (unter 30 kB)'
+        : 'ZU GROSS für den Kachel-Cache'),
+      '',
+      'Linien je Layer:',
+      ...Object.entries(perLayer).map(
+        ([id, count]) => '  ' + LAYERS[id].name.padEnd(11) + count),
+    ].join('\n');
+  } catch (err) {
+    stats.classList.add('err');
+    stats.textContent = 'Fehler: ' + err.message;
+  }
+}
+
+/** The radar's own furniture, drawn on top so the map reads as background. */
+function drawRadarGrid(ctx) {
+  ctx.strokeStyle = 'rgb(16,100,32)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.arc(120, 120, (GRID_OUTER_PX * i) / 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(120 - GRID_OUTER_PX, 120); ctx.lineTo(120 + GRID_OUTER_PX, 120);
+  ctx.moveTo(120, 120 - GRID_OUTER_PX); ctx.lineTo(120, 120 + GRID_OUTER_PX);
+  ctx.stroke();
+  ctx.fillStyle = 'rgb(16,100,32)';
+  ctx.beginPath();
+  ctx.arc(120, 120, 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function buildLegend() {
+  $('legend').innerHTML = Object.values(LAYERS).map((l) =>
+    '<span><i class="swatch" style="background:' + l.color + '"></i>' +
+    l.name + '</span>').join('');
+}
+
+$('dir').addEventListener('change', (event) => {
+  localFiles = new Map();
+  for (const file of event.target.files) {
+    // Strip the directory the picker prepends so paths match the URL layout.
+    const path = file.webkitRelativePath.split('/').slice(1).join('/');
+    localFiles.set(path, file);
+  }
+  manifest = null;
+});
+$('base').addEventListener('input', () => { localFiles = null; manifest = null; });
+$('go').addEventListener('click', render);
+
+buildLegend();
+</script>
+</body>
+</html>

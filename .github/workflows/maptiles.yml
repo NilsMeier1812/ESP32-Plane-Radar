@@ -1,0 +1,167 @@
+name: Map tiles
+
+# Generates the vector background tiles the radar draws under the aircraft.
+#
+# Manual only. The job downloads a multi-GB OSM extract and takes a while, and
+# it exists to answer a question — "how big is a real tile?" — before any
+# firmware is written against the format. Publishing is opt-in for the same
+# reason: the default run produces numbers and a downloadable artifact and
+# touches no branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Region name (used in the manifest and output path)'
+        default: 'netherlands'
+        required: true
+      extract_url:
+        description: 'Geofabrik .osm.pbf URL'
+        default: 'https://download.geofabrik.de/europe/netherlands-latest.osm.pbf'
+        required: true
+      bbox:
+        description: 'min_lon,min_lat,max_lon,max_lat'
+        default: '3.3,50.7,7.3,53.6'
+        required: true
+      zooms:
+        description: 'Space-separated zoom:tolerance_m pairs'
+        default: '9:150 11:30'
+        required: true
+      publish:
+        description: 'Push the result to the maptiles branch (see note below)'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the generator before spending time on downloads
+        run: python3 scripts/maptiles/test_maptiles.py
+
+      - name: Install osmium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+          osmium --version
+
+      - name: Show disk space
+        run: df -h /
+
+      - name: Download the OSM extract
+        run: |
+          curl -fSL --retry 4 --retry-delay 5 \
+            -o extract.osm.pbf "${{ inputs.extract_url }}"
+          ls -lh extract.osm.pbf
+
+      # Cuts the extract down to the handful of tags the radar draws. Without
+      # this the export step would emit gigabytes of GeoJSON for buildings and
+      # footpaths that never reach a tile.
+      - name: Filter to the layers we draw
+        run: |
+          osmium tags-filter extract.osm.pbf \
+            w/natural=coastline \
+            wr/natural=water \
+            wr/landuse=reservoir \
+            w/waterway=riverbank \
+            w/waterway=river,canal \
+            w/highway=motorway,trunk,motorway_link,trunk_link \
+            w/highway=primary,primary_link \
+            w/railway=rail \
+            -o filtered.osm.pbf
+          ls -lh filtered.osm.pbf
+          rm -f extract.osm.pbf
+
+      - name: Export to line-delimited GeoJSON
+        run: |
+          osmium export filtered.osm.pbf \
+            --geometry-types=linestring,polygon \
+            -f geojsonseq -o features.geojsonl
+          ls -lh features.geojsonl
+          echo "features: $(wc -l < features.geojsonl)"
+          rm -f filtered.osm.pbf
+
+      - name: Build tiles
+        run: |
+          ZOOM_ARGS=""
+          for spec in ${{ inputs.zooms }}; do
+            ZOOM_ARGS="$ZOOM_ARGS --zoom $spec"
+          done
+          python3 scripts/maptiles/build.py features.geojsonl \
+            --out "tiles/${{ inputs.region }}" \
+            --region "${{ inputs.region }}" \
+            --bbox "${{ inputs.bbox }}" \
+            $ZOOM_ARGS
+          rm -f features.geojsonl
+
+      # This is the actual deliverable of step 1: the numbers that decide
+      # whether the format needs delta coding before the firmware parser is
+      # written, and whether a tile fits the device's cache budget.
+      - name: Report tile statistics
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          region = os.environ["REGION"]
+          root = os.path.join("tiles", region)
+          with open(os.path.join(root, "manifest.json")) as fh:
+              manifest = json.load(fh)
+
+          print("## Map tiles: %s\n" % region)
+          print("| zoom | tolerance | tiles | total | average | largest |")
+          print("|---|---|---|---|---|---|")
+          for z in manifest["zooms"]:
+              print("| %d | %g m | %d | %.1f MB | %d B | %d B |" % (
+                  z["zoom"], z["tolerance_m"], z["tiles"],
+                  z["bytes"] / 1048576.0, z["avg_bytes"], z["max_bytes"]))
+
+          budget = 8192
+          print("\n**Device budget check** (a tile should stay under "
+                "%d B so four fit the ~30 kB cache):\n" % budget)
+          for z in manifest["zooms"]:
+              ok = "fits" if z["max_bytes"] <= budget else "TOO BIG"
+              print("- z%d largest tile %d B — %s" % (
+                  z["zoom"], z["max_bytes"], ok))
+          PY
+        env:
+          REGION: ${{ inputs.region }}
+
+      - name: Upload tiles as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maptiles-${{ inputs.region }}
+          path: tiles/
+          retention-days: 14
+
+      # NOTE: pushing this branch does not by itself make the tiles reachable.
+      # A repository serves exactly one GitHub Pages source, and this one is
+      # already serving docs/ from the default branch (that is where gps.html
+      # lives). Serving tiles as well needs one of:
+      #   - a second repository with its own Pages site (keeps this repo lean,
+      #     which matters at tens of thousands of tile files), or
+      #   - moving the Pages source to a branch that carries docs/ *and*
+      #     tiles/, which this job would then have to assemble.
+      # Until that is decided the artifact above is the way to get the tiles,
+      # and this step stays opt-in.
+      - name: Publish to the maptiles branch
+        if: ${{ inputs.publish }}
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # Orphan branch: the tile tree has nothing to do with the source
+          # history, and keeping it separate stops normal clones from
+          # dragging tens of thousands of tile files along.
+          git checkout --orphan maptiles-tmp
+          git rm -rf --cached . >/dev/null
+          find . -maxdepth 1 ! -name . ! -name .git ! -name tiles \
+            -exec rm -rf {} +
+          mv tiles/* .
+          rmdir tiles
+          echo 'Generated by .github/workflows/maptiles.yml — do not edit.' > README.md
+          touch .nojekyll
+          git add -A
+          git commit -q -m "Map tiles: ${{ inputs.region }}"
+          git push -f origin maptiles-tmp:maptiles
