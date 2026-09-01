@@ -4,3 +4,7 @@ release/
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Python bytecode from the map tile generator
+__pycache__/
+*.pyc
