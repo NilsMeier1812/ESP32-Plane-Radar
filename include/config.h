@@ -184,17 +184,21 @@ constexpr unsigned long kNtpPollIntervalMs = 1000;
  * ESP-IDF image, once the clock is set. Before NTP syncs there is no way to
  * judge validity dates, so the first fetches stay unverified.
  *
- * If verification keeps failing (a root rotation the firmware predates), the
- * client falls back to unverified after kAdsbTlsFailuresBeforeFallback tries
- * and says so on serial and in /api/state — a radar that stops showing
- * aircraft would be a worse outcome than an unauthenticated public data feed.
- */
-/**
- * Off by default on this board. Verification is the right thing to want, but
- * on a C3 that already spends 115 kB on the frame buffer it needs more heap
- * during the handshake than is reliably there, and a radar that shows nothing
- * is worse than an unauthenticated public data feed. Turn it on from the
- * config page once the heap readings show room (the setting is persisted).
+ * Note what this does and does not control: the API is HTTPS-only, so the TLS
+ * transport itself is not optional and always costs its mbedTLS record buffers
+ * (~20 kB while the pooled connection is open). This flag only adds the
+ * *authentication* on top, and that is the expensive half — parsing the
+ * server's chain against the bundle wants roughly 40-50 kB contiguous during
+ * the handshake.
+ *
+ * Off by default because that block was not reliably there while the frame
+ * buffer sat at 16 bpp. Since the buffer dropped to 8 bpp there is far more
+ * room, so it is worth trying: turn it on from the config page (the setting is
+ * persisted) and watch BLOCK on debug page 1. If verification keeps failing —
+ * too little heap, or a root rotation the firmware predates — the client falls
+ * back to unverified after kAdsbTlsFailuresBeforeFallback tries, persists that,
+ * and says so on serial and in /api/state. A radar that shows nothing would be
+ * a worse outcome than an unauthenticated public data feed.
  */
 constexpr bool kAdsbVerifyTls = false;
 constexpr uint8_t kAdsbTlsFailuresBeforeFallback = 3;
