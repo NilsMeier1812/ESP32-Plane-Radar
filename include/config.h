@@ -107,6 +107,24 @@ constexpr gpio_num_t kDisplayPinSclk = GPIO_NUM_4;  // display SCL
 constexpr int kDisplayWidth = 240;
 constexpr int kDisplayHeight = 240;
 
+/**
+ * Colour depth of the off-screen frame buffer.
+ *
+ * This is the single biggest RAM decision in the firmware. At 16 bpp the
+ * buffer is 240*240*2 = 112 kB, roughly 60% of the heap an ESP32-C3 has left
+ * once the Wi-Fi stack is up — which leaves too little for a TLS handshake
+ * (40-50 kB contiguous), the web server and JSON parsing all at once. That is
+ * not a feature too many; it is one buffer too large.
+ *
+ * At 8 bpp it is 56 kB and everything else fits comfortably. Colours go
+ * through RGB332, so the palette quantises and anti-aliased edges band a
+ * little; on a radar of solid greens, reds and white labels that is barely
+ * visible, and it buys a device that actually keeps its connection.
+ *
+ * Set back to 16 only on a board with PSRAM.
+ */
+constexpr uint8_t kRadarFrameColorDepth = 8;
+
 constexpr uint32_t kDisplaySpiWriteHz = 40000000;
 // GC9A01 modules often need invert + BGR for correct black/green output
 constexpr bool kDisplayInvert = true;

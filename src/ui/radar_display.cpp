@@ -812,17 +812,19 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  // 16 bpp is the good case. If that block is gone, half-depth still beats
-  // drawing straight to the panel, which has to clear the screen on every
-  // frame — colours quantise, but the picture stops flickering.
-  for (const uint8_t depth : {16, 8}) {
+  // Configured depth first; half of it as a last resort before giving up on
+  // double buffering, since drawing straight to the panel clears the screen on
+  // every frame and that is what flickering looks like.
+  for (const uint8_t depth : {config::kRadarFrameColorDepth, uint8_t{8}}) {
     s_frame.setColorDepth(depth);
     if (s_frame.createSprite(radar::kSize, radar::kSize)) {
       s_frame_ready = true;
-      if (depth != 16) {
-        Serial.printf("radar: frame buffer at %u bpp (heap too fragmented)\n",
-                      static_cast<unsigned>(depth));
-      }
+      Serial.printf("radar: frame buffer %ux%u at %u bpp (%u bytes)\n",
+                    static_cast<unsigned>(radar::kSize),
+                    static_cast<unsigned>(radar::kSize),
+                    static_cast<unsigned>(depth),
+                    static_cast<unsigned>(radar::kSize) *
+                        static_cast<unsigned>(radar::kSize) * depth / 8U);
       return true;
     }
   }

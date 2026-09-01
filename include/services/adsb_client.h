@@ -21,7 +21,12 @@ struct Aircraft {
   char hex[8];
 };
 
-constexpr size_t kMaxAircraft = 64;
+/**
+ * Even the widest preset (25 km) rarely carries more than a dozen aircraft,
+ * and every slot is static RAM plus a tag to draw. Keeping this tight also
+ * bounds how large the parsed document can get.
+ */
+constexpr size_t kMaxAircraft = 28;
 
 size_t aircraftCount();
 const Aircraft* aircraftList();

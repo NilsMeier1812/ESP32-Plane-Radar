@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include <esp_heap_caps.h>
+
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
@@ -222,6 +224,13 @@ void setup() {
   if (wifiSetupConnect()) {
     showRadarIfConnected();
   }
+
+  // The number that decides whether this device can hold a TLS connection at
+  // all — worth one line in the log after everything has claimed its memory.
+  Serial.printf("heap after startup: %u free, largest block %u\n",
+                static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(
+                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 }
 
 void loop() {
