@@ -812,13 +812,22 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  s_frame.setColorDepth(16);
-  if (!s_frame.createSprite(radar::kSize, radar::kSize)) {
-    Serial.println("radar: frame sprite alloc failed");
-    return false;
+  // 16 bpp is the good case. If that block is gone, half-depth still beats
+  // drawing straight to the panel, which has to clear the screen on every
+  // frame — colours quantise, but the picture stops flickering.
+  for (const uint8_t depth : {16, 8}) {
+    s_frame.setColorDepth(depth);
+    if (s_frame.createSprite(radar::kSize, radar::kSize)) {
+      s_frame_ready = true;
+      if (depth != 16) {
+        Serial.printf("radar: frame buffer at %u bpp (heap too fragmented)\n",
+                      static_cast<unsigned>(depth));
+      }
+      return true;
+    }
   }
-  s_frame_ready = true;
-  return true;
+  Serial.println("radar: no frame buffer — drawing direct, expect flicker");
+  return false;
 }
 
 // Double-buffered frame: composite the grid AND aircraft into the off-screen
@@ -920,12 +929,11 @@ LGFX_Sprite* radarFrameSprite() {
   return ensureFrameSprite() ? &s_frame : nullptr;
 }
 
-void radarReleaseFrameSprite() {
-  if (!s_frame_ready) {
-    return;
+void radarPrepareFrameSprite() {
+  if (ensureFrameSprite()) {
+    Serial.printf("radar: frame buffer reserved (%u bytes free)\n",
+                  static_cast<unsigned>(ESP.getFreeHeap()));
   }
-  s_frame.deleteSprite();
-  s_frame_ready = false;
 }
 
 void radarDisplayDraw() {

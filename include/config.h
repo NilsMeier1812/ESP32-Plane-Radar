@@ -205,12 +205,7 @@ constexpr unsigned long kAdsbConnectionMaxAgeMs = 300000;  // 5 min
  * this the attempt would stall for seconds and fail anyway.
  */
 constexpr uint32_t kAdsbMinHeapForFetch = 22000;
-/**
- * Free the frame buffer before a fetch once the largest block drops below
- * this — trading double-buffering for a working data feed is a good deal, and
- * the next draw simply allocates it again.
- */
-constexpr uint32_t kAdsbReleaseFrameBelow = 80000;
+
 
 // --- Aircraft tracking (follow a callsign / registration) ---
 /** No fresh fix for the tracked aircraft this long → show "signal lost". */

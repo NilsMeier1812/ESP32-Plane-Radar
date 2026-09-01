@@ -12,12 +12,14 @@ namespace ui {
 LGFX_Sprite* radarFrameSprite();
 
 /**
- * Free the frame buffer (240x240x16bpp = 115 kB — by far the largest single
- * allocation). It is dead weight while the loop sits in a network call, and
- * that is exactly when a TLS handshake needs a big contiguous block. The next
- * draw allocates it again; if that fails, drawing falls back to the panel.
+ * Claim the frame buffer during setup, before Wi-Fi and TLS have carved up the
+ * heap. It needs 115 kB in one piece (240x240x16bpp), and once the heap is
+ * fragmented that block is simply not there any more — the allocation then
+ * fails for good and every redraw falls back to clearing the panel directly,
+ * which looks like the whole screen flickering. So take it while it is easy,
+ * and never give it back.
  */
-void radarReleaseFrameSprite();
+void radarPrepareFrameSprite();
 
 /** Draw the static sonar/radar grid (black disc, green overlay, labels). */
 void radarDisplayDraw();

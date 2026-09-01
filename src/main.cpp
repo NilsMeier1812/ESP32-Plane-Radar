@@ -5,8 +5,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-#include <esp_heap_caps.h>
-
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
@@ -166,14 +164,6 @@ void fetchAircraft() {
   namespace tr = services::tracking;
   const float fetch_km = ui::radar::fetchRadiusKm();
 
-  // The frame buffer is idle for the whole network call and is the largest
-  // block on the heap; hand it back when the handshake would otherwise be
-  // squeezed. The next draw re-allocates it.
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) <
-      config::kAdsbReleaseFrameBelow) {
-    ui::radarReleaseFrameSprite();
-  }
-
   if (tr::active() && tr::needsLocate()) {
     // Acquiring or re-acquiring the target: global callsign/registration lookup.
     float la = 0.0f;
@@ -219,6 +209,7 @@ void setup() {
 
   bootButtonInit();
   displayInit();
+  ui::radarPrepareFrameSprite();  // grab the big block while the heap is fresh
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }
