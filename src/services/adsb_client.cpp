@@ -1,6 +1,7 @@
 #include "services/adsb_client.h"
 
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <WiFiClientSecure.h>
 
 #include <ArduinoJson.h>
@@ -48,6 +49,22 @@ bool s_http_ready = false;
 bool s_tls_verified = false;
 uint8_t s_tls_failures = 0;
 bool s_tls_gave_up = false;
+/** Own namespace so it cannot collide with the other Preferences handles. */
+constexpr char kPrefsNamespace[] = "adsb";
+constexpr char kPrefsTlsKey[] = "tlsVerify";
+
+bool s_tls_verify_enabled = config::kAdsbVerifyTls;
+bool s_prefs_loaded = false;
+bool s_force_rebuild = false;
+/** When the pooled connection was built; recycled periodically (see below). */
+unsigned long s_client_built_ms = 0;
+
+Health s_health = {};
+
+void setError(const char* msg) {
+  strncpy(s_health.last_error, msg, sizeof(s_health.last_error) - 1);
+  s_health.last_error[sizeof(s_health.last_error) - 1] = '\0';
+}
 
 void pollNetwork() {
   if (s_poll_fn != nullptr) {
@@ -57,8 +74,13 @@ void pollNetwork() {
 
 int performGetWithPoll(HTTPClient& http) {
   http.setConnectTimeout(kConnectAttemptMs);
+  // A connect blocks the whole loop (the web server included), so once we are
+  // already in a failure streak a second attempt only doubles the stall — the
+  // backoff will come back around soon enough.
+  const uint8_t attempts =
+      (s_health.consecutive_failures > 0) ? 1 : kConnectAttempts;
   int code = HTTPC_ERROR_CONNECTION_REFUSED;
-  for (uint8_t attempt = 0; attempt < kConnectAttempts; ++attempt) {
+  for (uint8_t attempt = 0; attempt < attempts; ++attempt) {
     pollNetwork();
     code = http.GET();
     if (code > 0) {
@@ -260,13 +282,41 @@ bool planeMatches(const JsonObject& plane, const char* key) {
  * Certificates cannot be judged before the clock is set, so verification turns
  * itself on the moment NTP lands.
  */
+/** The switch has to survive a reboot, or turning it off fixes nothing. */
+void loadPrefsOnce() {
+  if (s_prefs_loaded) {
+    return;
+  }
+  s_prefs_loaded = true;
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNamespace, true)) {
+    return;
+  }
+  s_tls_verify_enabled = prefs.getBool(kPrefsTlsKey, config::kAdsbVerifyTls);
+  prefs.end();
+}
+
 void ensureTlsMode() {
-  const bool want_verify = config::kAdsbVerifyTls && !s_tls_gave_up &&
+  loadPrefsOnce();
+  const bool want_verify = s_tls_verify_enabled && !s_tls_gave_up &&
                            services::clock_time::synced();
-  if (s_http_ready && want_verify == s_tls_verified) {
+  const unsigned long now = millis();
+  // Recycle the pooled connection now and then: a keep-alive socket the peer
+  // dropped, or a TLS session that got wedged, otherwise stays broken until
+  // the next reboot — which is what a radar that "just stops" looks like.
+  const bool stale = s_http_ready && s_client_built_ms != 0 &&
+                     now - s_client_built_ms > config::kAdsbConnectionMaxAgeMs;
+
+  if (s_http_ready && !s_force_rebuild && !stale &&
+      want_verify == s_tls_verified) {
     return;
   }
 
+  if (s_http_ready) {
+    Serial.printf("adsb: rebuilding connection (%s)\n",
+                  s_force_rebuild ? "after failures"
+                                  : (stale ? "age" : "trust mode"));
+  }
   s_http.end();
   s_client.stop();
   if (want_verify) {
@@ -278,6 +328,8 @@ void ensureTlsMode() {
   s_tls_verified = want_verify;
   s_http.setReuse(true);  // keep the TLS connection alive between requests
   s_http_ready = true;
+  s_force_rebuild = false;
+  s_client_built_ms = now;
 }
 
 /** A verified connection that keeps failing falls back rather than going dark. */
@@ -289,41 +341,94 @@ void noteTlsFailure() {
     return;
   }
   s_tls_gave_up = true;
+  s_force_rebuild = true;
   Serial.println(
       "adsb: certificate verification failed repeatedly — continuing "
       "unverified (check the firmware's root CA bundle)");
 }
 
+void noteFailure(int code, const char* what) {
+  ++s_health.fail_count;
+  ++s_health.consecutive_failures;
+  s_health.last_http_code = code;
+  setError(what);
+  // Every few failures, throw the connection away instead of retrying into a
+  // socket that may already be unusable.
+  if (s_health.consecutive_failures % config::kAdsbRebuildEveryNFailures == 0) {
+    s_force_rebuild = true;
+  }
+  Serial.printf("adsb: fetch failed (%s, code %d, %u in a row, heap %u)\n", what,
+                code, static_cast<unsigned>(s_health.consecutive_failures),
+                static_cast<unsigned>(ESP.getFreeHeap()));
+}
+
+void noteSuccess() {
+  ++s_health.ok_count;
+  s_health.consecutive_failures = 0;
+  s_health.last_ok_ms = millis();
+  s_health.last_http_code = HTTP_CODE_OK;
+  s_tls_failures = 0;
+  setError("");
+}
+
 bool httpGetJson(const String& url, JsonDocument& doc) {
+  const unsigned long started = millis();
+  s_health.last_attempt_ms = started;
+  s_health.heap_before_last = ESP.getFreeHeap();
+
+  struct DurationGuard {
+    unsigned long start;
+    ~DurationGuard() {
+      s_health.last_duration_ms = static_cast<uint32_t>(millis() - start);
+    }
+  } guard{started};
+
+  // A TLS handshake needs a sizeable contiguous block. Attempting one without
+  // it stalls the loop for seconds and fails anyway, so skip and say so.
+  if (s_health.heap_before_last < config::kAdsbMinHeapForFetch) {
+    noteFailure(0, "zu wenig Speicher");
+    s_force_rebuild = true;
+    return false;
+  }
+
   ensureTlsMode();
   if (!s_http.begin(s_client, url)) {
-    Serial.println("adsb: http.begin failed");
+    noteFailure(0, "http.begin fehlgeschlagen");
+    s_force_rebuild = true;
     return false;
   }
   s_http.setTimeout(kRequestTimeoutMs);
+  // Public APIs are within their rights to refuse anonymous clients, and it
+  // makes this device identifiable in adsb.fi's logs.
+  s_http.setUserAgent(config::kAdsbUserAgent);
   const int code = performGetWithPoll(s_http);
   if (code != HTTP_CODE_OK) {
-    Serial.printf("adsb: HTTP %d\n", code);
     s_http.end();
     if (code < 0) {
-      noteTlsFailure();  // transport-level failure: a handshake reject looks like this
+      noteFailure(code, "keine Verbindung");
+      noteTlsFailure();  // a rejected handshake also surfaces as a negative code
+    } else if (code == 429) {
+      noteFailure(code, "Ratenlimit (HTTP 429)");
+    } else {
+      noteFailure(code, "HTTP-Fehler");
     }
     return false;
   }
-  s_tls_failures = 0;
   String payload;
   if (!readResponseBodyWithPoll(s_http, payload)) {
-    Serial.println("adsb: empty response");
     s_http.end();
+    noteFailure(code, "leere Antwort");
+    s_force_rebuild = true;
     return false;
   }
   s_http.end();  // with setReuse(true) this keeps the socket open for next time
 
   const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
-    Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
+    noteFailure(code, err.c_str());
     return false;
   }
+  noteSuccess();
   return true;
 }
 
@@ -332,6 +437,53 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
 void setPollFn(PollFn fn) { s_poll_fn = fn; }
 
 bool tlsVerified() { return s_tls_verified; }
+
+bool tlsVerifyEnabled() {
+  loadPrefsOnce();
+  return s_tls_verify_enabled;
+}
+
+void setTlsVerifyEnabled(bool on) {
+  loadPrefsOnce();
+  if (s_tls_verify_enabled == on) {
+    return;
+  }
+  s_tls_verify_enabled = on;
+  Preferences prefs;
+  if (prefs.begin(kPrefsNamespace, false)) {
+    prefs.putBool(kPrefsTlsKey, on);
+    prefs.end();
+  }
+  s_tls_gave_up = false;  // an explicit choice clears an earlier auto-fallback
+  s_tls_failures = 0;
+  s_force_rebuild = true;
+  Serial.printf("adsb: certificate verification %s\n", on ? "on" : "off");
+}
+
+const Health& health() { return s_health; }
+
+unsigned long fetchIntervalMs() {
+  const uint16_t fails = s_health.consecutive_failures;
+  if (fails < config::kAdsbBackoffAfterFailures) {
+    return config::kAdsbFetchIntervalMs;
+  }
+  // Each further step doubles the wait, up to the cap. Failing quietly every
+  // half minute beats stalling the loop every two seconds.
+  unsigned long interval = config::kAdsbBackoffBaseMs;
+  for (uint16_t i = config::kAdsbBackoffAfterFailures; i < fails && i < 16; ++i) {
+    interval *= 2;
+    if (interval >= config::kAdsbBackoffMaxMs) {
+      return config::kAdsbBackoffMaxMs;
+    }
+  }
+  return interval;
+}
+
+void resetConnection() {
+  s_force_rebuild = true;
+  s_health.consecutive_failures = 0;  // retry at full speed after a manual reset
+  Serial.println("adsb: connection reset requested");
+}
 
 size_t aircraftCount() { return s_aircraft_count; }
 

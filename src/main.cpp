@@ -210,7 +210,7 @@ void loop() {
         g_last_adsb_fetch_ms = 0;
       }
       const unsigned long now = millis();
-      if (now - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
+      if (now - g_last_adsb_fetch_ms >= services::adsb::fetchIntervalMs()) {
         g_last_adsb_fetch_ms = now;
         fetchAircraft();
       }

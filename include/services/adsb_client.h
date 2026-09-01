@@ -31,6 +31,44 @@ const Aircraft* aircraftList();
  */
 bool tlsVerified();
 
+/** Runtime switch for certificate verification (persisted; default on). */
+bool tlsVerifyEnabled();
+void setTlsVerifyEnabled(bool on);
+
+/**
+ * Why the radar is (or is not) getting data. Everything needed to tell a rate
+ * limit (HTTP 429) from a refused handshake (negative code) from a device that
+ * has run out of heap — none of which look any different on the display.
+ */
+struct Health {
+  /** Last code from the API: >0 is an HTTP status, <0 an HTTPClient error. */
+  int last_http_code;
+  /** Consecutive failed fetches; drives the retry backoff. */
+  uint16_t consecutive_failures;
+  uint32_t ok_count;
+  uint32_t fail_count;
+  /** millis() of the last successful fetch and the last attempt. */
+  unsigned long last_ok_ms;
+  unsigned long last_attempt_ms;
+  /** How long the last attempt took (ms) — a blocking connect shows up here. */
+  uint32_t last_duration_ms;
+  /** Free heap right before the last attempt, for spotting exhaustion. */
+  uint32_t heap_before_last;
+  char last_error[48];
+};
+
+const Health& health();
+
+/**
+ * How long to wait before the next fetch. Normally the configured interval;
+ * after repeated failures it backs off, which keeps a dead API from blocking
+ * the loop (and the config page) every couple of seconds.
+ */
+unsigned long fetchIntervalMs();
+
+/** Drop the pooled TLS connection so the next request builds a fresh one. */
+void resetConnection();
+
 /** millis() timestamp of the last successful fetch (0 if none yet). */
 unsigned long lastUpdateMillis();
 

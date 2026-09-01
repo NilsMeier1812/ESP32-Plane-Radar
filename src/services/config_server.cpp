@@ -7,6 +7,8 @@
 
 #include <cstring>
 
+#include <esp_system.h>
+
 #ifdef WM_MDNS
 #include <ESPmDNS.h>
 #endif
@@ -80,6 +82,12 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
   .net button { flex: 0 0 auto; padding: 6px 10px; font-size: .8rem;
                 background: #2a1a1a; color: #e8b0b0; }
   .empty { color: #7d8f84; font-size: .8rem; margin-bottom: 8px; }
+  .diag { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+          font-size: .8rem; }
+  .diag b { color: #9fb0a5; font-weight: 500; white-space: nowrap; }
+  .diag span { font-variant-numeric: tabular-nums; word-break: break-word; }
+  .diag .bad { color: #ff9b9b; }
+  .diag .good { color: #3ad07a; }
 </style>
 </head>
 <body>
@@ -171,6 +179,21 @@ const char kPage[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card">
+    <h2>Diagnose</h2>
+    <div id="diag" class="diag"></div>
+    <div class="row mt">
+      <button class="ghost" onclick="load(true)">Aktualisieren</button>
+      <button class="ghost" onclick="reconnect()">Verbindung neu aufbauen</button>
+    </div>
+    <div class="toggle"><span>TLS-Zertifikat prüfen</span>
+      <input id="tlsverify" type="checkbox" style="width:auto" onchange="setOptions()"></div>
+    <div class="hint">Wenn „Letzter Fehler" dauerhaft etwas meldet, steht hier
+      die Ursache: „keine Verbindung" = Netz/TLS, „Ratenlimit" = die API
+      bremst, „zu wenig Speicher" = Heap voll. Zum Ausschließen von TLS den
+      Haken kurz entfernen.</div>
+  </div>
+
+  <div class="card">
     <h2>Firmware</h2>
     <div class="hint" id="fwinfo" style="margin-top:0"></div>
     <label>Firmware-Datei (.bin)</label>
@@ -201,6 +224,8 @@ function render(){
   document.getElementById('autozoom').checked = !!S.auto_zoom;
   document.getElementById('altmin').value = S.alt_min_ft || 0;
   document.getElementById('altmax').value = S.alt_max_ft || 0;
+  document.getElementById('tlsverify').checked = !!S.tls_verify_enabled;
+  renderDiag();
   document.getElementById('fwinfo').textContent =
     'Version ' + (S.version||'?') + ' · Zeit ' + (S.time_utc||'?') +
     ' · TLS ' + (S.tls_verified ? 'geprüft' : 'ungeprüft');
@@ -229,7 +254,43 @@ function render(){
     b.onclick=()=>setScale(i); box.appendChild(b);
   });
 }
-async function load(){ S = await api('/api/state'); render(); }
+function renderDiag(){
+  const d = S.diag || {};
+  const box = document.getElementById('diag');
+  const fails = d.fails_in_row || 0;
+  const age = (d.data_age_s === undefined || d.data_age_s < 0)
+    ? 'noch nie' : d.data_age_s + ' s';
+  const rows = [
+    ['Flugzeuge', (d.aircraft ?? '?') + ''],
+    ['Daten alt', age, fails > 0 ? 'bad' : 'good'],
+    ['Fehler in Folge', fails + '', fails > 0 ? 'bad' : 'good'],
+    ['Letzter Fehler', d.last_error || '—', d.last_error ? 'bad' : 'good'],
+    ['Letzter Code', (d.last_http_code ?? 0) + ''],
+    ['Abrufe ok / Fehler', (d.ok_count||0) + ' / ' + (d.fail_count||0)],
+    ['Abrufdauer', (d.last_duration_ms||0) + ' ms'],
+    ['Abstand', Math.round((d.fetch_interval_ms||0)/1000) + ' s'],
+    ['Heap frei / min', Math.round((d.heap_free||0)/1024) + ' / ' +
+                        Math.round((d.heap_min||0)/1024) + ' kB'],
+    ['WLAN-Signal', (d.rssi ?? '?') + ' dBm'],
+    ['Laufzeit', Math.floor((d.uptime_s||0)/60) + ' min'],
+    ['Neustartgrund', (d.reset_reason ?? '?') + ''],
+    ['TLS', S.tls_verified ? 'geprüft' : 'ungeprüft'],
+  ];
+  box.innerHTML = '';
+  rows.forEach(([k,v,cls])=>{
+    const b=document.createElement('b'); b.textContent=k; box.appendChild(b);
+    const sp=document.createElement('span'); sp.textContent=v;
+    if(cls) sp.className=cls; box.appendChild(sp);
+  });
+}
+async function load(showToast){
+  S = await api('/api/state'); render();
+  if(showToast) toast('Aktualisiert');
+}
+async function reconnect(){
+  const r=await api('/api/reconnect',{});
+  if(r.ok){S=r.state;render();toast(r.msg||'Neu verbunden');}
+}
 async function setIcao(){
   const v=document.getElementById('icao').value.trim();
   if(!v) return;
@@ -252,7 +313,8 @@ async function setOptions(){
     miles:document.getElementById('miles').checked,
     runways:document.getElementById('runways').checked,
     trails:document.getElementById('trails').checked,
-    auto_zoom:document.getElementById('autozoom').checked});
+    auto_zoom:document.getElementById('autozoom').checked,
+    tls_verify:document.getElementById('tlsverify').checked});
   if(r.ok){S=r.state;render();}
 }
 async function setAltFilter(){
@@ -342,6 +404,26 @@ void fillState(JsonObject o) {
   o["version"] = config::kFirmwareVersion;
   o["time_utc"] = services::clock_time::isoUtc();
   o["tls_verified"] = services::adsb::tlsVerified();
+  o["tls_verify_enabled"] = services::adsb::tlsVerifyEnabled();
+
+  const services::adsb::Health& h = services::adsb::health();
+  JsonObject diag = o["diag"].to<JsonObject>();
+  diag["uptime_s"] = millis() / 1000UL;
+  diag["heap_free"] = ESP.getFreeHeap();
+  diag["heap_min"] = ESP.getMinFreeHeap();
+  diag["rssi"] = WiFi.RSSI();
+  diag["reset_reason"] = static_cast<int>(esp_reset_reason());
+  diag["last_http_code"] = h.last_http_code;
+  diag["fails_in_row"] = h.consecutive_failures;
+  diag["ok_count"] = h.ok_count;
+  diag["fail_count"] = h.fail_count;
+  diag["last_error"] = h.last_error;
+  diag["last_duration_ms"] = h.last_duration_ms;
+  diag["heap_before_last"] = h.heap_before_last;
+  diag["fetch_interval_ms"] = services::adsb::fetchIntervalMs();
+  diag["data_age_s"] =
+      (h.last_ok_ms == 0) ? -1 : static_cast<long>((millis() - h.last_ok_ms) / 1000UL);
+  diag["aircraft"] = services::adsb::aircraftCount();
   o["ip"] = WiFi.localIP().toString();
   o["ssid"] = WiFi.SSID();
   JsonArray nets = o["networks"].to<JsonArray>();
@@ -462,6 +544,9 @@ void handleOptionsPost() {
   }
   if (doc["auto_zoom"].is<bool>()) {
     ui::radar::setAutoZoom(doc["auto_zoom"].as<bool>());
+  }
+  if (doc["tls_verify"].is<bool>()) {
+    services::adsb::setTlsVerifyEnabled(doc["tls_verify"].as<bool>());
   }
   if (doc["alt_min_ft"].is<int>() || doc["alt_max_ft"].is<int>()) {
     ui::radar::setAltFilter(doc["alt_min_ft"] | ui::radar::altMinFt(),
@@ -640,6 +725,12 @@ void handleUpdateUpload() {
   }
 }
 
+/** Drop the pooled TLS connection and retry at full speed. */
+void handleReconnectPost() {
+  services::adsb::resetConnection();
+  sendState(200, true, "Verbindung wird neu aufgebaut");
+}
+
 void handlePage() { s_server.send_P(200, "text/html; charset=utf-8", kPage); }
 
 }  // namespace
@@ -671,6 +762,7 @@ void begin() {
   s_server.on("/api/wifi", HTTP_POST, handleWifiPost);
   s_server.on("/api/wifi/scan", HTTP_GET, handleWifiScanGet);
   s_server.on("/api/update", HTTP_POST, handleUpdatePost, handleUpdateUpload);
+  s_server.on("/api/reconnect", HTTP_POST, handleReconnectPost);
   s_server.onNotFound(handlePage);
   s_server.begin();
   s_running = true;

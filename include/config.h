@@ -167,6 +167,27 @@ constexpr unsigned long kNtpPollIntervalMs = 1000;
 constexpr bool kAdsbVerifyTls = true;
 constexpr uint8_t kAdsbTlsFailuresBeforeFallback = 3;
 
+// --- ADS-B fetch resilience ---
+/** Identifies the device in adsb.fi's logs; some APIs refuse an empty one. */
+constexpr char kAdsbUserAgent[] = "ESP32-Plane-Radar";
+/**
+ * A connect blocks the main loop — the config page included — so a dead API
+ * must not be retried every couple of seconds. After this many consecutive
+ * failures the interval backs off, doubling per further failure up to the cap.
+ */
+constexpr uint16_t kAdsbBackoffAfterFailures = 3;
+constexpr unsigned long kAdsbBackoffBaseMs = 8000;
+constexpr unsigned long kAdsbBackoffMaxMs = 60000;
+/** Throw the pooled connection away every N failures: it may be unusable. */
+constexpr uint16_t kAdsbRebuildEveryNFailures = 4;
+/**
+ * Rebuild the pooled connection at this age even while it works. A keep-alive
+ * socket the peer quietly dropped otherwise stays broken until a reboot.
+ */
+constexpr unsigned long kAdsbConnectionMaxAgeMs = 300000;  // 5 min
+/** Below this free heap a TLS handshake cannot succeed; skip and report. */
+constexpr uint32_t kAdsbMinHeapForFetch = 40000;
+
 // --- Aircraft tracking (follow a callsign / registration) ---
 /** No fresh fix for the tracked aircraft this long → show "signal lost". */
 constexpr unsigned long kTrackSignalLostMs = 6000UL;
